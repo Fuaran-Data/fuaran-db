@@ -36,7 +36,8 @@ let private shop (fingerprint: FingerprintMethod option) : ModelNode =
       Kind =
         NodeKind.Model
             { Name = "shop"
-              Classifications = [ "public" ] }
+              Classifications = [ "public" ]
+              Recordable = [] }
       Children =
         [ { Id = "s:shop"
             Kind =

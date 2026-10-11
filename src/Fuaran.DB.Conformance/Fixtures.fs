@@ -73,7 +73,8 @@ module Fixtures =
           Kind =
             NodeKind.Model
                 { Name = "conformance"
-                  Classifications = [ "public" ] }
+                  Classifications = [ "public" ]
+                  Recordable = [] }
           Children =
             [ { Id = "s:conformance"
                 Kind =

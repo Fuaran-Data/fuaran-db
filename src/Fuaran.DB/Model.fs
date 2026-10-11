@@ -28,6 +28,11 @@ type ModelSpec =
         /// The classifications a column may carry, declared once; a column classified outside
         /// this set is a `DB-CLASSIFICATION-UNDECLARED` defect.
         Classifications: string list
+        /// The classifications whose values a connection record may hold (Phase 1903, DECISIONS.md
+        /// D9): a parameter value or a result row is recorded only when every classification it
+        /// carries is listed here. Empty by default, and empty means nothing is recorded. Each entry
+        /// is one of `Classifications`, or the model is a `DB-RECORDABLE-UNDECLARED` defect.
+        Recordable: string list
     }
 
 /// How a host can learn that a source moved without reading it (Phase 2008, DECISIONS.md D6). The

@@ -24,6 +24,11 @@ public feed, names one contract and is never repacked: a change after that point
   `Relation`, `Parameter`, `Statement`, `Dialect`, `Refusal`, `Bindings`, `SplitReport`, `Lowered`,
   `PlacementCase`, `TableProbe`, `Probe`, `ProbeRefusal`, and the functions of `Relation`, `Statement`,
   `Render`, `Refusal`, `Bindings`, `FoldSplit`, `PlacementLaws` and `Probe`. Every package in the repository is cut at the one version.
+- **The public F# surface of `Fuaran.DB.Session`**: `ResultDigest`, `SessionHeader`, `StatementRecord`,
+  `WithheldPart`, `SessionOp`, `SchemaEntry`, `Guard`, `Verdict`, `Split`, `Recorded`, `Outcome`,
+  `RequestRecord`, `SessionState`, `SessionRejection`, `StatementIdentity`, `SessionReadFault`, `Execute`,
+  `RunFailure`, `Session`, `Account`, `ReplayVerdict`, `Signer`, `SignedSession`, and the functions of
+  `SessionOps`, `SessionHash`, `Recording`, `SessionWire`, `Session`, `Export` and `StreamLaws`.
 - **The public F# surface of `Fuaran.DB.Dialect.SqlServer`** (the `SqlServer` module) **and of
   `Fuaran.DB.Conformance`** (`Pin`, `Fixture`, `HostFailure`, `Host`, `Verdict`, `FixtureReport`,
   `Report`, and the functions of `Fixtures` and `Kit`). `Pin` and `Verdict` are closed unions, closed on
@@ -31,7 +36,8 @@ public feed, names one contract and is never repacked: a change after that point
 - **The closed unions are closed on purpose.** A case added to `NodeKind`, `ModelOp`,
   `ModelRejection`, `PipelineRefusal`, `WireError`, `TableDrift`, `GrantLevel`, `PolicySite`,
   `PolicyRefusal`, `PolicyRule`, `FingerprintMethod`, `FingerprintKind`, `FingerprintReading`,
-  `FingerprintVerdict`, `Construct`, `Scalar`, `Relation`, `Pick`, `Refusal`, `Probe` or `ProbeRefusal` breaks every exhaustive match a consumer has written, so it is a breaking change,
+  `FingerprintVerdict`, `ResultDigest`, `WithheldPart`, `SessionOp`, `Verdict`, `Recorded`, `Outcome`,
+  `SessionRejection`, `SessionReadFault`, `RunFailure`, `ReplayVerdict`, `Construct`, `Scalar`, `Relation`, `Pick`, `Refusal`, `Probe` or `ProbeRefusal` breaks every exhaustive match a consumer has written, so it is a breaking change,
   never an additive one, whatever it looks like. A function added to the `Dialect` record breaks every
   dialect, for the same reason.
 - **A field added to a record** breaks every full-literal construction of it, and is breaking too.
@@ -40,6 +46,7 @@ public feed, names one contract and is never repacked: a change after that point
   that moves a vector's bytes is a new wire version.
 - **The codes**: every `DB-*` rule code in `ModelRules.codes`, every policy refusal code in
   `Policy.codes`, every `DB-WIRE-*` code from `ModelWire.code`, every `DB-PROBE-*` code from `Probe.code`,
+  every `DB-SESSION-*` code from `SessionOps.code`, `SessionWire.faultCode` and a recorded `Failed` op,
   and the AI surface's tool names and op kinds. A host matches on these; renaming one
   is breaking.
 - **What the check admits.** Making `PipelineCheck.check` or the model rules refuse something they
@@ -53,6 +60,11 @@ public feed, names one contract and is never repacked: a change after that point
 - **What a fingerprint discloses.** A method's kind and its disclosed misses are a contract a host trusts
   a schedule to: calling a method exact that was heuristic, or dropping a disclosed miss, is a change to the
   posture and needs a decision first. Adding a disclosed miss or over-report is a correction and rides.
+- **What the record holds, and the session wire.** The recording rule (DECISIONS.md D9.2 to D9.4) is part
+  of the security posture: recording a value the rule withholds, or a plain digest where it commits one, is
+  a change to the posture and needs a decision first. The session wire (op tags, member names, canonical
+  rendering, SHA-256 chain) is stated by `wire-fixtures/session/`, and moving a vector's bytes is a new wire
+  version. The statement hash's pre-image is a contract: changing it changes every recorded hash.
 - **What lowers, and the text it lowers to.** The declared subset (DECISIONS.md D4.4) and the shape of
   the statement's form are a contract: lowering less moves work from the database to the host, and
   lowering more is a claim of parity the placement laws must hold and a decision records first. A change
@@ -132,3 +144,23 @@ is BREAKING in shape and recorded as such; it would advance the version on a rel
   `counts`, `describe`, the emission). The fixtures are a contract: a fixture removed, or its expected
   answer changed, is a change to what a certified dialect has been shown to agree on, and the emitted set
   in `conformance/` is its executable statement.
+
+Riding the draft (Phase 1903), on the same terms: the connection record. One change is BREAKING in shape and
+is recorded as such. It would advance the version on a released slot.
+
+- **Breaking — `ModelSpec` gains `Recordable: string list`** (DECISIONS.md D9.1), the classifications whose
+  values a connection record may hold. A full-literal construction stops compiling, and `Recordable = []`
+  is the model that marks nothing recordable, which is what every model was before.
+- **Additive — the wire**: a `model` node may carry `recordable`, written only when it names a
+  classification. A model naming none renders to the bytes it rendered before, so every existing vector is
+  unchanged; `ops/08-amend.json` is the new one. A present empty array is refused (`DB-WIRE-WRONG-SHAPE`).
+- **Additive — the reading helpers**: `WireDecode` (the strict field readers the model codec already used,
+  now public so the session codec reads through the same ones) and `ModelWire.fingerprintJson` and
+  `fingerprintOf`.
+- **The posture, tightened**: a new rule code, `DB-RECORDABLE-UNDECLARED`.
+- **Additive — the new package `Fuaran.DB.Session`** (the surface listed above): the op vocabulary and its
+  reducer, the statement hash and capture key, the recording rule, the canonical session wire with its
+  reader, the recorder (`Session.start`, `reportSchema`, `request`, `lower`, `guard`, `run`), the reader
+  (`account`), the capture and replay (`captures`, `replayExecutor`, `replay`), the export (`Export.wire`,
+  `statement`, `pae`, `sign`, `envelope`) and the laws (`StreamLaws.laws`). The corpus gains
+  `wire-fixtures/session/`: one op per kind, two worked streams, and nine reader refusals.

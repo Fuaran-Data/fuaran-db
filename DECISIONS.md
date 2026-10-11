@@ -1,5 +1,79 @@
 # Fuaran.DB — decisions (newest first)
 
+## 2026-10-11 — D9: the connection record (Phase 1903)
+
+A new package, `Fuaran.DB.Session`: what passed over a connection, recorded as a hash-chained op-stream on
+Core's, so a published figure can name the pipeline, the policy rules, the statement, the schema and
+fingerprint, the row count and the moment it came from. Nine rulings, each with what would reopen it.
+
+1. **The model marks what is recordable; the model gains a field to say so.** The phase's task reads "a
+   parameter value or a result row is recorded only under a classification the model marks recordable",
+   and the model as it stood marked nothing: `ModelSpec` held only `Classifications`. So `ModelSpec` gains
+   `Recordable: string list`, the classifications whose values a record may hold. Empty is the default and
+   records nothing. The wire writes it only when it names something, so every existing vector keeps its
+   bytes, and a present empty array is refused as a second spelling. A new rule, `DB-RECORDABLE-UNDECLARED`,
+   refuses a recordable classification the model does not declare. The alternative, a recordable set the
+   host declares when it opens a session, was considered and declined, because the task says the
+   model marks it. Breaking for a full-literal `ModelSpec` on the 0.1.0 draft (STABILITY.md). *Reopen*
+   when recordability needs a finer grain than the classification.
+2. **One decision per request, over what the policy says it reads.** A request's reads are the
+   classifications of every column `PolicyRule.ColumnsGranted` lists, every column an applied row policy
+   names, and every column a group floor counts (`Recording.reads`). If all are recordable, the record holds
+   the parameter values, the result rows and the pipelines verbatim. Otherwise it holds none of them. The one
+   decision covers every value because a pipeline's literal is lowered to a parameter: recording the literal
+   while withholding the parameter would publish what the rule withholds. A withheld pipeline is recorded
+   with each literal and each embedded operand replaced by a numbered `withheld:N` slot. What remains is its
+   shape (columns, verbs, operators, named parameters), and that is enough to say which pipeline it was. The
+   rule over-approximates, because it does not trace which output column a classified input reaches. That
+   is sound, and the price is withholding some values that could have been recorded. *Reopen* with
+   per-column lineage from the provider.
+3. **A refusal to record is an op, and the reducer enforces the rule.** `Withheld` names the part
+   (parameters or rows) and exactly the unrecordable classifications read. The reducer refuses
+   `ValuesRecorded` or `RowsRecorded` for a request whose own `Admitted` op says it reads an unrecordable
+   classification, refuses a `Withheld` that does not name exactly those, and refuses a digest or capture key
+   of the wrong form. So a stream that breaks the rule does not fold. The rule is a property of the record,
+   not a promise made by its writer.
+4. **A withheld result's digest is committed, not plain.** A plain SHA-256 over a one-row count is one guess
+   away from its value. A result whose rows are withheld is therefore digested under a secret the host keeps
+   (`ResultDigest.Committed`). The host can later show that a result is the one recorded, and nobody without
+   the secret can test a guess against it. A recordable result's digest is plain, so anyone holding the rows
+   can check it. For the same reason a withheld request has no capture key: the key hashes the values. And a
+   fingerprint's change value is withheld when its change column is not recordable, with the table named.
+   *Reopen* if a verifier must check a withheld result without the host.
+5. **The statement hash is over the five inputs that fix it, and no value.** It is SHA-256 over an injective
+   pre-image of the text, the parameter count, each parameter's marker and type, the model's hash (over its
+   canonical wire), the dialect's id and version, and the provider's version. The provider's version is read
+   from its assembly (`major.minor.patch`), never typed by a host. The dialect's version is declared by the
+   host when it opens the session, because a `Dialect` is a record of functions with no version of its own.
+   The lowering is pure, so two hosts holding the same five inputs hold one hash. *Reopen* if the `Dialect`
+   record gains a version, which would replace the declared one.
+6. **The capture key follows `Query.invocationKey`'s pattern, with SHA-256.** It is the statement's hash,
+   `#`, and a hash of the name-sorted bindings, three fields each, spelled exactly as the invocation key
+   spells a cell. SHA-256 replaces FNV-1a, so that two distinct bindings sharing a key is out of reach rather
+   than merely unclaimed. A captured session replays through `Session.replayExecutor`, which answers from
+   the record and refuses a miss by name. `Session.replay` takes no executor at all: it rebuilds a
+   statement's result from the captured rows, runs the recorded local suffix again, and compares digests.
+7. **The reader refuses by the classes Core names.** A session's wire is Core's JSONL chain, hashed with
+   SHA-256. Core 0.36.0 names no "torn tail" or "rewound head" class, so the reader maps both onto what Core
+   does name. A line that does not scan is Core's `JsonlFault`, called a torn tail when it is the last line.
+   A broken chain is Core's `ChainBreak`. A head other than the one the reader holds has the shape of Core's
+   `AppendRejection.StaleHead` and is reported as rewound. The held head matters because a hash chain
+   authenticates every prefix of itself: a truncation at a line boundary verifies, and only an anchored head
+   catches it. *Reopen* when Core's typed load faults (its unreleased `StreamLoadFault`) ship, and adopt
+   them.
+8. **The export is an in-toto Statement v1 in a DSSE envelope, and the signer is an argument.** The one
+   subject is the session's head, so a signature covers every record through the chain. The predicate
+   summarises what the record claims: each statement was derived from a tree under a policy, and no result
+   is claimed correct. `Export.sign` takes each signer as `{ KeyId; Sign: byte[] -> byte[] }` over DSSE's
+   pre-authentication encoding. The package holds no key and references no signing package: it is a
+   provider at the witness seam, not a consumer of it.
+9. **The carried task 2008.t3 is the `Fingerprinted` op.** Beside each statement it guarded, the record
+   holds the source id, the method `Fingerprint.ofSource` returns, the kind from `Fingerprint.disclose`, the
+   reading taken before the statement (from `Probe.forSource` and `Probe.readTables`, or the host's file
+   metadata), and `Fingerprint.compare`'s verdict against the session's previous reading of that source.
+   The verdict is computed over the true readings the session holds. The reducer recomputes it whenever
+   neither reading had a value withheld, so a forged verdict does not fold.
+
 ## 2026-10-11 — D8: the SQL Server dialect and the conformance kit (Phase 1901)
 
 Two packages: `Fuaran.DB.Dialect.SqlServer`, the first dialect, and `Fuaran.DB.Conformance`, the kit that

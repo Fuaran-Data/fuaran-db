@@ -110,7 +110,8 @@ let genTree (rng: Rng.T) : ModelNode * Rng.T =
           Kind =
             NodeKind.Model
                 { Name = "generated"
-                  Classifications = [ "public"; "personal" ] }
+                  Classifications = [ "public"; "personal" ]
+                  Recordable = [] }
           Children = [ for _ in 1 .. below 3 -> source () ] }
 
     root, r

@@ -1,0 +1,1 @@
+{"$type":"lowered","boundary":"afterOrder","lowered":3,"redacted":0,"request":"q1","suffix":[{"$type":"filter","pred":{"$type":"binary","left":{"$type":"col","name":"channel"},"op":"startsWith","right":{"$type":"lit","cell":{"$type":"Str","value":"w"}}}}]}

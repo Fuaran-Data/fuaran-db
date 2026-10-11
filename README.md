@@ -36,6 +36,12 @@ refusals that set where the split falls, and the placement laws a dialect is cer
 [its README](src/Fuaran.DB.Dialect.SqlServer/README.md), and `Fuaran.DB.Conformance` is the kit a dialect is
 certified with: a seed, stated fixtures with the reference's answers (emitted to [`conformance/`](conformance/)),
 and a runner over the host's executor.
+`Fuaran.DB.Session` is the connection record. It holds what passed over a connection as a hash-chained
+op-stream: the schema each source reported, each pipeline and its policy verdict, the fingerprint guarding
+each statement, the statement by hash with its parameter types, the row count, a result digest and the
+outcome. It records values only under a classification the model marks recordable, and records each
+refusal to record as an op. A captured session replays without a database, and a session exports as the
+in-toto statement a witness signs, with the signer passed in.
 [`DECISIONS.md`](DECISIONS.md) records the decisions taken so far, and [`STABILITY.md`](STABILITY.md) what
 is a contract.
 

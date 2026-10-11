@@ -41,6 +41,14 @@ let sampleOps: ModelOp list =
           NodeKind.Source
               { Name = "sales"
                 Fingerprint = Some(FingerprintMethod.RowCountMaxChange [ "t:orders", "c:orders.order_date" ]) }
+      )
+      // then the model marking a classification recordable (Phase 1903), written only when it names one
+      ModelOp.Amend(
+          "m:retail",
+          NodeKind.Model
+              { Name = "retail"
+                Classifications = [ "public"; "personal" ]
+                Recordable = [ "public" ] }
       ) ]
 
 [<Tests>]

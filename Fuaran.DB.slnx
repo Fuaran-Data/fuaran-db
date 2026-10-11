@@ -4,6 +4,7 @@
     <Project Path="src/Fuaran.DB.Provider/Fuaran.DB.Provider.fsproj" />
     <Project Path="src/Fuaran.DB.Dialect.SqlServer/Fuaran.DB.Dialect.SqlServer.fsproj" />
     <Project Path="src/Fuaran.DB.Conformance/Fuaran.DB.Conformance.fsproj" />
+    <Project Path="src/Fuaran.DB.Session/Fuaran.DB.Session.fsproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Fuaran.DB.Tests/Fuaran.DB.Tests.fsproj" />

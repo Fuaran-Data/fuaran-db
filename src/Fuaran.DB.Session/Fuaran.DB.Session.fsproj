@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- An incomplete match is an error: the op vocabulary is a closed union matched with no
+         catch-all, so an op the record gains stops the build at every arm that must decide it. -->
+    <WarningsAsErrors>$(WarningsAsErrors);FS0025</WarningsAsErrors>
+    <WarnOn>3390;$(WarnOn)</WarnOn>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <PackageId>Fuaran.DB.Session</PackageId>
+    <Description>Fuaran.DB.Session — the connection record: what passed over a connection as a hash-chained op-stream on Fuaran.Core's, so a published figure can name the pipeline, the policy rules, the statement, the schema and fingerprint, the row count and the moment it came from. Statements by hash, parameter types, result digests; parameter values and result rows only under a classification the dataset model marks recordable, and a refusal to record is itself an op. A canonical wire codec with a reader that refuses a torn tail or a rewound head, a capture key per statement so a captured session replays without a database, the stream laws as a validator, and an export as the in-toto statement a witness signs, with the signer passed in. Opens no connection, reads no clock.</Description>
+    <RepositoryUrl>https://github.com/Fuaran-Data/fuaran-db</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Ops.fs" />
+    <Compile Include="Hashing.fs" />
+    <Compile Include="Recording.fs" />
+    <Compile Include="SessionWire.fs" />
+    <Compile Include="Session.fs" />
+    <Compile Include="Export.fs" />
+    <Compile Include="StreamLaws.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Released versions, resolvable from the public feed alone (DECISIONS.md D3). -->
+    <PackageReference Update="FSharp.Core" Version="10.1.300" />
+    <PackageReference Include="Fuaran.Core.OpStream" Version="0.36.0" />
+    <PackageReference Include="Fuaran.Core.Conformance" Version="0.36.0" />
+    <PackageReference Include="Fuaran.Compute.DataFrame" Version="0.38.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Fuaran.DB\Fuaran.DB.fsproj" />
+    <ProjectReference Include="..\Fuaran.DB.Provider\Fuaran.DB.Provider.fsproj" />
+  </ItemGroup>
+
+</Project>

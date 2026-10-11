@@ -25,6 +25,7 @@
     <Compile Include="FingerprintTests.fs" />
     <Compile Include="SubstraitSurveyTests.fs" />
     <Compile Include="SqlServerTests.fs" />
+    <Compile Include="SessionTests.fs" />
     <Compile Include="Main.fs" />
   </ItemGroup>
 
@@ -41,6 +42,7 @@
     <ProjectReference Include="..\..\src\Fuaran.DB.Provider\Fuaran.DB.Provider.fsproj" />
     <ProjectReference Include="..\..\src\Fuaran.DB.Dialect.SqlServer\Fuaran.DB.Dialect.SqlServer.fsproj" />
     <ProjectReference Include="..\..\src\Fuaran.DB.Conformance\Fuaran.DB.Conformance.fsproj" />
+    <ProjectReference Include="..\..\src\Fuaran.DB.Session\Fuaran.DB.Session.fsproj" />
   </ItemGroup>
 
 </Project>

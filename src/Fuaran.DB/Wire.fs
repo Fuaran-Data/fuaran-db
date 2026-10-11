@@ -17,6 +17,77 @@ type WireError =
     | BadExpression of path: string * detail: string
     | UnsupportedVersion of got: int * supported: int list
 
+/// The strict reading helpers every wire codec in the domain decodes through: a field is present,
+/// of its kind, and no field outside a shape's declared set is admitted. Each failure names its JSON
+/// path as a `WireError`.
+module WireDecode =
+
+    let fieldsOf (path: string) (v: JVal) : Result<(string * JVal) list, WireError> =
+        match v with
+        | JObj fs -> Ok fs
+        | _ -> Error(WireError.WrongShape(path, "an object"))
+
+    let only (path: string) (allowed: string list) (fs: (string * JVal) list) : Result<unit, WireError> =
+        match fs |> List.tryFind (fun (k, _) -> not (List.contains k allowed)) with
+        | Some(k, _) -> Error(WireError.UnknownField(path, k))
+        | None -> Ok()
+
+    let field (path: string) (name: string) (fs: (string * JVal) list) : Result<JVal, WireError> =
+        match fs |> List.tryFind (fun (k, _) -> k = name) with
+        | Some(_, v) -> Ok v
+        | None -> Error(WireError.MissingField(path, name))
+
+    let str (path: string) (name: string) fs : Result<string, WireError> =
+        field path name fs
+        |> Result.bind (fun v ->
+            match v with
+            | JStr s -> Ok s
+            | _ -> Error(WireError.WrongShape(path + "." + name, "a string")))
+
+    let intField (path: string) (name: string) fs : Result<int, WireError> =
+        field path name fs
+        |> Result.bind (fun v ->
+            match v with
+            | JInt i -> Ok i
+            | _ -> Error(WireError.WrongShape(path + "." + name, "an integer")))
+
+    /// An optional integer field: absent is None; present must be an integer.
+    let optInt (path: string) (name: string) (fs: (string * JVal) list) : Result<int option, WireError> =
+        match fs |> List.tryFind (fun (k, _) -> k = name) with
+        | None -> Ok None
+        | Some(_, JInt i) -> Ok(Some i)
+        | Some _ -> Error(WireError.WrongShape(path + "." + name, "an integer"))
+
+    let arr (path: string) (name: string) fs : Result<JVal list, WireError> =
+        field path name fs
+        |> Result.bind (fun v ->
+            match v with
+            | JArr xs -> Ok xs
+            | _ -> Error(WireError.WrongShape(path + "." + name, "an array")))
+
+    let traverse (f: int -> 'a -> Result<'b, WireError>) (xs: 'a list) : Result<'b list, WireError> =
+        xs
+        |> List.indexed
+        |> List.fold (fun acc (i, x) -> acc |> Result.bind (fun ys -> f i x |> Result.map (fun y -> y :: ys))) (Ok [])
+        |> Result.map List.rev
+
+    let strList (path: string) (name: string) fs : Result<string list, WireError> =
+        arr path name fs
+        |> Result.bind (
+            traverse (fun i v ->
+                match v with
+                | JStr s -> Ok s
+                | _ -> Error(WireError.WrongShape(sprintf "%s.%s[%d]" path name i, "a string")))
+        )
+
+    /// The `Result` computation expression the decoders are written in.
+    type ResultBuilder() =
+        member _.Bind(r: Result<'a, WireError>, f: 'a -> Result<'b, WireError>) = Result.bind f r
+        member _.Return(x: 'a) : Result<'a, WireError> = Ok x
+        member _.ReturnFrom(r: Result<'a, WireError>) = r
+
+    let result = ResultBuilder()
+
 /// The canonical wire codec for the dataset model, its state and its ops. Canonical: object keys
 /// sorted (Core's `Canon.render`), `$type`-tagged, one spelling per value, so equal models render
 /// to equal bytes. Strict: an unknown field, a missing one, or a kind the vocabulary does not
@@ -82,7 +153,7 @@ module ModelWire =
     let private strs (xs: string list) = JArr(xs |> List.map JStr)
 
     /// A fingerprint method as a typed object.
-    let private fingerprintJson (m: FingerprintMethod) : JVal =
+    let fingerprintJson (m: FingerprintMethod) : JVal =
         match m with
         | FingerprintMethod.ChangeCounter -> Canon.typed "changeCounter" []
         | FingerprintMethod.RowCountMaxChange pairs ->
@@ -94,7 +165,14 @@ module ModelWire =
     /// A kind's tag and its payload fields.
     let private kindFields (k: NodeKind) : (string * JVal) list =
         match k with
-        | NodeKind.Model s -> [ "name", JStr s.Name; "classifications", strs s.Classifications ]
+        | NodeKind.Model s ->
+            // The recordable set is written only when it names something, so a model that declares
+            // none renders to the bytes it rendered before the field existed (DECISIONS.md D9).
+            [ "name", JStr s.Name; "classifications", strs s.Classifications ]
+            @ (if List.isEmpty s.Recordable then
+                   []
+               else
+                   [ "recordable", strs s.Recordable ])
         | NodeKind.Source s ->
             // The fingerprint is written only when declared, so a source that declares none renders
             // to the bytes it rendered before the field existed (DECISIONS.md D6).
@@ -174,76 +252,12 @@ module ModelWire =
 
     // ---- decode ----
 
-    let private fieldsOf (path: string) (v: JVal) : Result<(string * JVal) list, WireError> =
-        match v with
-        | JObj fs -> Ok fs
-        | _ -> Error(WireError.WrongShape(path, "an object"))
-
-    let private only (path: string) (allowed: string list) (fs: (string * JVal) list) : Result<unit, WireError> =
-        match fs |> List.tryFind (fun (k, _) -> not (List.contains k allowed)) with
-        | Some(k, _) -> Error(WireError.UnknownField(path, k))
-        | None -> Ok()
-
-    let private field (path: string) (name: string) (fs: (string * JVal) list) : Result<JVal, WireError> =
-        match fs |> List.tryFind (fun (k, _) -> k = name) with
-        | Some(_, v) -> Ok v
-        | None -> Error(WireError.MissingField(path, name))
-
-    let private str (path: string) (name: string) fs : Result<string, WireError> =
-        field path name fs
-        |> Result.bind (fun v ->
-            match v with
-            | JStr s -> Ok s
-            | _ -> Error(WireError.WrongShape(path + "." + name, "a string")))
-
-    let private intField (path: string) (name: string) fs : Result<int, WireError> =
-        field path name fs
-        |> Result.bind (fun v ->
-            match v with
-            | JInt i -> Ok i
-            | _ -> Error(WireError.WrongShape(path + "." + name, "an integer")))
-
-    /// An optional integer field: absent is None; present must be an integer.
-    let private optInt (path: string) (name: string) (fs: (string * JVal) list) : Result<int option, WireError> =
-        match fs |> List.tryFind (fun (k, _) -> k = name) with
-        | None -> Ok None
-        | Some(_, JInt i) -> Ok(Some i)
-        | Some _ -> Error(WireError.WrongShape(path + "." + name, "an integer"))
-
-    let private arr (path: string) (name: string) fs : Result<JVal list, WireError> =
-        field path name fs
-        |> Result.bind (fun v ->
-            match v with
-            | JArr xs -> Ok xs
-            | _ -> Error(WireError.WrongShape(path + "." + name, "an array")))
-
-    let private traverse (f: int -> 'a -> Result<'b, WireError>) (xs: 'a list) : Result<'b list, WireError> =
-        xs
-        |> List.indexed
-        |> List.fold (fun acc (i, x) -> acc |> Result.bind (fun ys -> f i x |> Result.map (fun y -> y :: ys))) (Ok [])
-        |> Result.map List.rev
-
-    let private strList (path: string) (name: string) fs : Result<string list, WireError> =
-        arr path name fs
-        |> Result.bind (
-            traverse (fun i v ->
-                match v with
-                | JStr s -> Ok s
-                | _ -> Error(WireError.WrongShape(sprintf "%s.%s[%d]" path name i, "a string")))
-        )
-
-    /// The `Result` computation expression the decoders are written in.
-    type private ResultBuilder() =
-        member _.Bind(r: Result<'a, WireError>, f: 'a -> Result<'b, WireError>) = Result.bind f r
-        member _.Return(x: 'a) : Result<'a, WireError> = Ok x
-        member _.ReturnFrom(r: Result<'a, WireError>) = r
-
-    let private result = ResultBuilder()
+    open WireDecode
 
     /// The payload fields a kind declares, beside `$type`.
     let private payloadFields (tag: string) : string list =
         match tag with
-        | "model" -> [ "name"; "classifications" ]
+        | "model" -> [ "name"; "classifications"; "recordable" ]
         | "source" -> [ "name"; "fingerprint" ]
         | "table" -> [ "name"; "physical" ]
         | "column" -> [ "name"; "physical"; "type"; "classification" ]
@@ -277,7 +291,8 @@ module ModelWire =
             return t, c
         }
 
-    let private fingerprintOf (path: string) (v: JVal) : Result<FingerprintMethod, WireError> =
+    /// A fingerprint method from its typed object, strictly: the inverse of `fingerprintJson`.
+    let fingerprintOf (path: string) (v: JVal) : Result<FingerprintMethod, WireError> =
         result {
             let! fs = fieldsOf path v
             let! tag = str path "$type" fs
@@ -315,7 +330,21 @@ module ModelWire =
             result {
                 let! name = str path "name" fs
                 let! cls = strList path "classifications" fs
-                return NodeKind.Model { Name = name; Classifications = cls }
+
+                // Absent is the empty set; an empty set is written by omission, so a present empty
+                // array is a second spelling of one value and is refused.
+                let! recordable =
+                    match fs |> List.tryFind (fun (k, _) -> k = "recordable") with
+                    | None -> Ok []
+                    | Some(_, JArr []) ->
+                        Error(WireError.WrongShape(path + ".recordable", "a non-empty array (an empty set is omitted)"))
+                    | Some _ -> strList path "recordable" fs
+
+                return
+                    NodeKind.Model
+                        { Name = name
+                          Classifications = cls
+                          Recordable = recordable }
             }
         | "source" ->
             result {

@@ -40,6 +40,10 @@ module ModelRules =
     [<Literal>]
     let ClassificationUndeclared = "DB-CLASSIFICATION-UNDECLARED"
 
+    /// The model marks a classification recordable that it does not declare (Phase 1903).
+    [<Literal>]
+    let RecordableUndeclared = "DB-RECORDABLE-UNDECLARED"
+
     /// A limit whose numbers are out of range: a row ceiling, group floor or timeout that is not
     /// positive, or a join or grouping cap below zero (`LimitSpec.fault`).
     [<Literal>]
@@ -81,6 +85,7 @@ module ModelRules =
           MeasureType
           PolicyColumn
           ClassificationUndeclared
+          RecordableUndeclared
           LimitNonPositive
           NameDuplicate
           RootNotModel
@@ -266,7 +271,22 @@ module ModelRules =
     let private modelRules (root: ModelNode) : Defect<string> list =
         let rootDefects, declared =
             match Model.spec root with
-            | Some s -> [], Some(Set.ofList s.Classifications)
+            | Some s ->
+                let declared = Set.ofList s.Classifications
+
+                s.Recordable
+                |> List.distinct
+                |> List.filter (fun c -> not (declared.Contains c))
+                |> List.map (fun c ->
+                    defect
+                        RecordableUndeclared
+                        (sprintf
+                            "the model marks '%s' recordable but declares only: %s"
+                            c
+                            (String.concat ", " (Set.toList declared)))
+                        root.Id
+                        []),
+                Some declared
             | None ->
                 [ defect
                       RootNotModel

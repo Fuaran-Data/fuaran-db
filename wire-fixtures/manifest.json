@@ -13,8 +13,8 @@
       "id": "ops",
       "kind": "accept-op",
       "path": "ops",
-      "vectors": 7,
-      "description": "One op per kind: add (a leaf and a subtree), amend (a rename, a limit), retire; then an amend to a limit declaring every optional cost cap (Phase 1902), whose four fields are written only when declared; then an amend to a source declaring a row-count fingerprint (Phase 2008), whose field is written only when declared."
+      "vectors": 8,
+      "description": "One op per kind: add (a leaf and a subtree), amend (a rename, a limit), retire; then an amend to a limit declaring every optional cost cap (Phase 1902), whose four fields are written only when declared; then an amend to a source declaring a row-count fingerprint (Phase 2008), whose field is written only when declared; then an amend to the model marking a classification recordable (Phase 1903), whose field is written only when it names one."
     },
     {
       "id": "rejects",
@@ -22,6 +22,27 @@
       "path": "rejects.json",
       "vectors": 15,
       "description": "Texts the decoder refuses, each with its code."
+    },
+    {
+      "id": "session-ops",
+      "kind": "accept-session-op",
+      "path": "session/ops",
+      "vectors": 14,
+      "description": "The connection record (Phase 1903): one op per kind, the first of each in the worked sessions, numbered in the vocabulary's order."
+    },
+    {
+      "id": "session-streams",
+      "kind": "accept-session",
+      "path": "session/streams",
+      "vectors": 2,
+      "description": "Worked sessions as canonical JSONL chains (SHA-256, no trailing newline): one over a model marking only 'public' recordable, whose personal request is recorded with its values withheld, and one marking every classification recordable. Each reads, verifies, folds and re-writes to its own bytes."
+    },
+    {
+      "id": "session-rejects",
+      "kind": "reject-session",
+      "path": "session/rejects.json",
+      "vectors": 9,
+      "description": "Session texts the reader refuses, each with its code: a torn tail, a rewound head (against the head the vector names), a broken chain, a verified chain the reducer refuses, and op texts the codec refuses."
     }
   ]
 }

@@ -80,7 +80,8 @@ let private modelWith (limits: LimitSpec list) : ModelNode =
       Kind =
         NodeKind.Model
             { Name = "people"
-              Classifications = [ "public"; "internal"; "personal" ] }
+              Classifications = [ "public"; "internal"; "personal" ]
+              Recordable = [] }
       Children =
         [ { Id = "s:hr"
             Kind = NodeKind.Source { Name = "hr"; Fingerprint = None }

@@ -62,7 +62,8 @@ let model: ModelNode =
       Kind =
         NodeKind.Model
             { Name = "retail"
-              Classifications = [ "public"; "personal" ] }
+              Classifications = [ "public"; "personal" ]
+              Recordable = [] }
       Children =
         [ { Id = "s:sales"
             Kind = NodeKind.Source { Name = "sales"; Fingerprint = None }

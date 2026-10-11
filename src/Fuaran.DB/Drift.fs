@@ -76,7 +76,8 @@ module Drift =
           Kind =
             NodeKind.Model
                 { Name = modelName
-                  Classifications = [ classification ] }
+                  Classifications = [ classification ]
+                  Recordable = [] }
           Children =
             [ { Id = "s:" + source
                 Kind = NodeKind.Source { Name = source; Fingerprint = None }

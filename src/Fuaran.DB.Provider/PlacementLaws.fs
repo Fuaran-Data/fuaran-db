@@ -73,7 +73,8 @@ module PlacementLaws =
           Kind =
             NodeKind.Model
                 { Name = "placement"
-                  Classifications = [ "public" ] }
+                  Classifications = [ "public" ]
+                  Recordable = [] }
           Children =
             [ { Id = "src"
                 Kind =
