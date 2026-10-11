@@ -24,6 +24,10 @@ public feed, names one contract and is never repacked: a change after that point
   `Relation`, `Parameter`, `Statement`, `Dialect`, `Refusal`, `Bindings`, `SplitReport`, `Lowered`,
   `PlacementCase`, `TableProbe`, `Probe`, `ProbeRefusal`, and the functions of `Relation`, `Statement`,
   `Render`, `Refusal`, `Bindings`, `FoldSplit`, `PlacementLaws` and `Probe`. Every package in the repository is cut at the one version.
+- **The public F# surface of `Fuaran.DB.Dialect.SqlServer`** (the `SqlServer` module) **and of
+  `Fuaran.DB.Conformance`** (`Pin`, `Fixture`, `HostFailure`, `Host`, `Verdict`, `FixtureReport`,
+  `Report`, and the functions of `Fixtures` and `Kit`). `Pin` and `Verdict` are closed unions, closed on
+  purpose, as above.
 - **The closed unions are closed on purpose.** A case added to `NodeKind`, `ModelOp`,
   `ModelRejection`, `PipelineRefusal`, `WireError`, `TableDrift`, `GrantLevel`, `PolicySite`,
   `PolicyRefusal`, `PolicyRule`, `FingerprintMethod`, `FingerprintKind`, `FingerprintReading`,
@@ -106,3 +110,25 @@ shape and recorded as such.
 - **The posture, tightened**: four new rule codes, `DB-FINGERPRINT-DANGLING`, `-FOREIGN`, `-TYPE` and
   `-COVERAGE`, refuse a row-count fingerprint that names what the model does not hold, reaches outside its
   source, reads a change column of a type that does not advance, or leaves a table out.
+
+Riding the draft (Phase 1901), on the same terms: the first dialect and the conformance kit. One change
+is BREAKING in shape and recorded as such; it would advance the version on a released slot.
+
+- **Breaking — the `Dialect` record gains three fields** (DECISIONS.md D8.1, the reopening D4.8 named):
+  `RenderAggregate: AggFn -> ColumnType -> string -> string`, which renders an aggregate given the type of
+  the column it aggregates, and `ValueAsCondition` and `ConditionAsValue: string -> string`, which convert
+  between a boolean value and a condition for an engine with no boolean type (identity for one with it).
+  Every dialect value must name them. `RenderFunction` is no longer called for an aggregate, and the
+  renderer now places each scalar in a condition or a value position; for a dialect whose two conversions
+  are identity, every statement's text is unchanged.
+- **Additive — the new package `Fuaran.DB.Dialect.SqlServer`**: `SqlServer.dialect`, its parts (`quote`,
+  `marker`, `mapType`, `columnType`, `refuses`), and what a host needs to bind and read (`parameterValue`,
+  `decodeCell`, `createTable`, `dropTable`, `insertRow`). Its refusals and its type map are part of its
+  contract: refusing more moves work to the host, and mapping more is a claim of parity the conformance
+  kit must hold first.
+- **Additive — the new package `Fuaran.DB.Conformance`**: `Pin`, `Fixture`, `HostFailure`, `Host`,
+  `Verdict`, `FixtureReport`, `Report`, the `Fixtures` module (the seed and the fixtures) and the `Kit`
+  module (`version`, `subject`, `expected`, `agrees`, `predicted`, `runFixture`, `runWith`, `run`,
+  `counts`, `describe`, the emission). The fixtures are a contract: a fixture removed, or its expected
+  answer changed, is a change to what a certified dialect has been shown to agree on, and the emitted set
+  in `conformance/` is its executable statement.

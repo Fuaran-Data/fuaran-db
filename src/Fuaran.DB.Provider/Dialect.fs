@@ -21,9 +21,20 @@ type Dialect =
         QuoteIdentifier: string -> string
         /// The marker for the parameter at this 0-based ordinal.
         ParameterMarker: int -> string
-        /// Render a function, an operator or an aggregate over its already-rendered arguments. Called
-        /// only for a construct `Refuses` admitted.
+        /// Render a scalar function or an operator over its already-rendered arguments. Called only
+        /// for a construct `Refuses` admitted. A logical operator's arguments arrive as conditions,
+        /// every other argument as a value.
         RenderFunction: Construct -> string list -> string
+        /// Render an aggregate over its already-rendered argument, given the type of the column it
+        /// aggregates: an engine whose aggregate types differ from the reference's widens or casts
+        /// here (DECISIONS.md D8). Called only for an aggregate `Refuses` admitted.
+        RenderAggregate: AggFn -> ColumnType -> string -> string
+        /// A boolean VALUE read where a condition is required: identity for an engine with a boolean
+        /// type, a comparison for one without (DECISIONS.md D8).
+        ValueAsCondition: string -> string
+        /// A CONDITION read where a boolean value is required, keeping its three values: identity for
+        /// an engine with a boolean type, a `CASE` for one without (DECISIONS.md D8).
+        ConditionAsValue: string -> string
         /// The clause that orders a select by these rendered keys — NULLS LAST in either direction,
         /// as the reference evaluator orders them — skips the rows `offset` names and takes the rows
         /// `limit` names (both rendered parameter markers).
@@ -58,29 +69,70 @@ module Render =
     let rec private relation (d: Dialect) (next: unit -> string) (r: Relation) : string =
         let q = d.QuoteIdentifier
 
-        let rec scalar (s: Scalar) : string =
+        // A scalar is rendered in one of two positions: as a CONDITION (a `WHERE`, a `CASE` branch's
+        // test, a logical operator's operand) or as a VALUE (everywhere else). A form that yields a
+        // condition read as a value, or the reverse, passes through the dialect's conversion, which is
+        // identity for an engine with a boolean type.
+        let isCondition (s: Scalar) : bool =
+            match s with
+            | Scalar.Operator((Eq | Ne | Lt | Le | Gt | Ge | And | Or | Contains | StartsWith | EndsWith), _, _)
+            | Scalar.Not _
+            | Scalar.IsNull _
+            | Scalar.InList _ -> true
+            | Scalar.Operator((Add | Sub | Mul | Div | Mod), _, _)
+            | Scalar.Column _
+            | Scalar.Parameter _
+            | Scalar.Function _
+            | Scalar.Coalesce _
+            | Scalar.Case _ -> false
+
+        let rec value (s: Scalar) : string =
+            if isCondition s then
+                d.ConditionAsValue(conditionForm s)
+            else
+                valueForm s
+
+        and condition (s: Scalar) : string =
+            if isCondition s then
+                conditionForm s
+            else
+                d.ValueAsCondition(valueForm s)
+
+        /// A condition-yielding form, rendered as a condition.
+        and conditionForm (s: Scalar) : string =
+            match s with
+            | Scalar.Operator((And | Or) as op, a, b) ->
+                d.RenderFunction (Construct.Operator op) [ condition a; condition b ]
+            | Scalar.Not x -> "(NOT " + condition x + ")"
+            | Scalar.IsNull x -> "(" + value x + " IS NULL)"
+            | Scalar.InList(x, items) ->
+                "(" + value x + " IN (" + (items |> List.map value |> String.concat ", ") + "))"
+            | Scalar.Operator _
+            | Scalar.Column _
+            | Scalar.Parameter _
+            | Scalar.Function _
+            | Scalar.Coalesce _
+            | Scalar.Case _ -> valueForm s
+
+        /// A value-yielding form (and a comparison, whose operands are values), rendered as written.
+        and valueForm (s: Scalar) : string =
             match s with
             | Scalar.Column a -> q a
             | Scalar.Parameter i -> d.ParameterMarker i
-            | Scalar.Function(f, args) -> d.RenderFunction (Construct.Function f) (args |> List.map scalar)
-            | Scalar.Operator(op, a, b) -> d.RenderFunction (Construct.Operator op) [ scalar a; scalar b ]
-            | Scalar.Not x -> "(NOT " + scalar x + ")"
-            | Scalar.IsNull x -> "(" + scalar x + " IS NULL)"
-            | Scalar.Coalesce xs -> "COALESCE(" + (xs |> List.map scalar |> String.concat ", ") + ")"
+            | Scalar.Function(f, args) -> d.RenderFunction (Construct.Function f) (args |> List.map value)
+            | Scalar.Operator(op, a, b) -> d.RenderFunction (Construct.Operator op) [ value a; value b ]
+            | Scalar.Coalesce xs -> "COALESCE(" + (xs |> List.map value |> String.concat ", ") + ")"
             | Scalar.Case(cases, otherwise) ->
                 "(CASE"
                 + (cases
-                   |> List.map (fun (w, t) -> " WHEN " + scalar w + " THEN " + scalar t)
+                   |> List.map (fun (w, t) -> " WHEN " + condition w + " THEN " + value t)
                    |> String.concat "")
                 + " ELSE "
-                + scalar otherwise
+                + value otherwise
                 + " END)"
-            | Scalar.InList(x, items) ->
-                "("
-                + scalar x
-                + " IN ("
-                + (items |> List.map scalar |> String.concat ", ")
-                + "))"
+            | Scalar.Not _
+            | Scalar.IsNull _
+            | Scalar.InList _ -> conditionForm s
 
         let columnsOf (input: Relation) =
             Relation.outputs input |> List.map (fun o -> q o.Alias) |> String.concat ", "
@@ -99,7 +151,7 @@ module Render =
             + q table
         | Relation.Where(input, predicate) ->
             let src, _ = from input
-            "SELECT " + columnsOf input + " FROM " + src + " WHERE " + scalar predicate
+            "SELECT " + columnsOf input + " FROM " + src + " WHERE " + condition predicate
         | Relation.Select(input, columns) ->
             let src, _ = from input
 
@@ -157,11 +209,13 @@ module Render =
         | Relation.Aggregate(input, keys, aggregates, nonEmpty) ->
             let src, _ = from input
 
+            let typeOf (a: string) =
+                (Relation.outputs input |> List.find (fun o -> o.Alias = a)).Type
+
             let selected =
                 (keys |> List.map (fun (a, o) -> q a + " AS " + q o.Alias))
                 @ (aggregates
-                   |> List.map (fun (fn, a, o) ->
-                       d.RenderFunction (Construct.Aggregate fn) [ q a ] + " AS " + q o.Alias))
+                   |> List.map (fun (fn, a, o) -> d.RenderAggregate fn (typeOf a) (q a) + " AS " + q o.Alias))
 
             "SELECT "
             + String.concat ", " selected

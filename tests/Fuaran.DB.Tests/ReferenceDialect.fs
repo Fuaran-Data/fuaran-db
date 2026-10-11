@@ -54,6 +54,9 @@ let dialect: Dialect =
       QuoteIdentifier = quote
       ParameterMarker = fun i -> "@p" + string i
       RenderFunction = render
+      RenderAggregate = fun fn _ a -> render (Construct.Aggregate fn) [ a ]
+      ValueAsCondition = id
+      ConditionAsValue = id
       RenderPaging =
         fun keys limit offset ->
             "ORDER BY "

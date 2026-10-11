@@ -31,7 +31,11 @@ a fingerprint a host polls to learn that it moved without reading it, each metho
 exact or heuristic and what it can miss; the provider writes each dialect's probe for it.
 `Fuaran.DB.Provider` lowers an admitted pipeline, and nothing else: the dialect seam, the fold split that
 lowers the longest reducing prefix to one parameterised statement and runs the rest locally, the named
-refusals that set where the split falls, and the placement laws a dialect is certified against. No dialect ships yet.
+refusals that set where the split falls, and the placement laws a dialect is certified against.
+`Fuaran.DB.Dialect.SqlServer` is the first dialect, T-SQL, its refusals and pinned differences named in
+[its README](src/Fuaran.DB.Dialect.SqlServer/README.md), and `Fuaran.DB.Conformance` is the kit a dialect is
+certified with: a seed, stated fixtures with the reference's answers (emitted to [`conformance/`](conformance/)),
+and a runner over the host's executor.
 [`DECISIONS.md`](DECISIONS.md) records the decisions taken so far, and [`STABILITY.md`](STABILITY.md) what
 is a contract.
 
@@ -43,6 +47,9 @@ Requires the .NET SDK pinned in [`global.json`](global.json).
 ./run.ps1      # restore tools, format, build, test
 ./verify.ps1   # the gate
 ```
+
+The suite runs the conformance kit against a real SQL Server only when `FUARAN_DB_SQLSERVER` holds a
+connection string to one it may create and drop a database on; without it, that leg reports Pending.
 
 ## Licence
 

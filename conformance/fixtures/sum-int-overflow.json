@@ -1,0 +1,1 @@
+{"description":"an int sum past int32 is refused, as the reference refuses it","expected":{"refused":"OverflowError \"sum overflowed int32: 2500000005\""},"id":"sum-int-overflow","kit":"0.1.0","ordered":false,"pins":[],"pipeline":[{"$type":"groupBy","aggs":[{"fn":"sum","name":"total","of":"pts"}],"keys":[]},{"$type":"limit","n":100,"offset":0}],"source":"points"}

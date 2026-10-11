@@ -52,5 +52,8 @@ let main argv =
     if Array.contains "--write-fixtures" argv then
         writeFixtures ()
         0
+    elif Array.contains "--write-conformance" argv then
+        SqlServerTests.writeConformance ()
+        0
     else
         runTestsInAssemblyWithCLIArgs [] argv

@@ -1,5 +1,63 @@
 # Fuaran.DB — decisions (newest first)
 
+## 2026-10-11 — D8: the SQL Server dialect and the conformance kit (Phase 1901)
+
+Two packages: `Fuaran.DB.Dialect.SqlServer`, the first dialect, and `Fuaran.DB.Conformance`, the kit that
+says what "agrees with the reference" means for an engine. Six rulings, each with what would reopen it.
+
+1. **The dialect seam is reopened, as D4.8 said it would be.** T-SQL has no boolean type, so the record as
+   Phase 1900 shipped it could not spell a bit column used as a condition (`WHERE [flag]`), a `CASE` or
+   `COALESCE` yielding a condition, or a `MIN` over a bit; and a pushed `Sum` over `int` could not be
+   widened without the type of the column it sums. The record gains three fields: `RenderAggregate`,
+   given the aggregated column's type; and `ValueAsCondition` and `ConditionAsValue`, which the renderer
+   calls where a scalar's form and its position disagree (a value in a `WHERE`, a `CASE` test or a logical
+   operand; a condition anywhere else). Both are identity for an engine with a boolean type, and the
+   reference dialect's text is unchanged byte for byte; the placement laws hold over it at the Phase-1900
+   seed and iterations, unchanged. Breaking on the 0.1.0 draft (STABILITY.md). The probe's two aggregates
+   moved to `RenderAggregate` with it. *Reopen* when a dialect finds another construct it cannot spell.
+2. **What the dialect lowers, and what it refuses.** Every function, operator and aggregate is matched
+   with no catch-all and either mapped or refused with a reason the dialect's README names. Mapped:
+   `Abs`, `Round`, `Floor`, `Ceil`, `Trim` (the reference's four-character set, spelled), `Sqrt` (null for
+   a negative argument, spelled), `+`, `-`, `*`, the comparisons, `AND`, `OR`, `Count`, `CountDistinct`,
+   `Sum`, `Mean`, `Min`, `Max`. Refused: the string functions whose T-SQL counterpart reads the collation
+   or counts from 1, `DatePart` and `DateDiffDays`, `Concat`, `Least` and `Greatest`, `Div`, `Mod`, the
+   substring operators (predicted by recipe 07, D4.4), and the aggregates and constructs the provider's
+   own subset excludes. Mapping one of them is a claim of parity: *reopen* only with a fixture that shows
+   it against an engine.
+3. **The differences, each pinned one of three ways, each with a fixture.** *Spelled* so the engine
+   agrees: null ordering (an explicit null flag per key), booleans (ruling 1), a mean (`AVG` over a float
+   cast), a negative root. *Refused* so the step runs locally: integer division and decimal scale on
+   division (`Div`, `Mod`, `Quotient`, `Rounded`), date truncation (`DatePart`, `DateDiffDays`). *Declared*
+   where the engine's answer may differ and the kit can say how: collation and case, and the float
+   summation order. The integer width of a pushed `Sum` (D4.6) is *decoded*: the sum is widened to
+   `bigint` in the engine and `decodeCell` refuses it past int32 with the reference's own refusal, so the
+   statement no longer fails where the reference refuses.
+4. **A pin is checkable, never a waiver.** The kit's verdicts are agreed, differing as pinned, and
+   differing unexpectedly. A fixture's answer is differing as pinned only when it EQUALS an answer the pin
+   predicts: under `CaseInsensitiveCollation`, the reference's over case-folded seed and bindings; under
+   `FloatSummationOrder`, the reference's over some order of the source rows (a source of at most seven).
+   Any other difference is unexpected. Rows compare as a bag unless the fixture ends in a page whose keys
+   are unique over what it keeps. *Reopen* the pin set when a dialect meets a difference neither predicts.
+5. **The kit takes the host's executor and goes through the policy.** No package opens a connection; the
+   kit's `Host` seeds the physical tables and runs a statement, answering rows or a `HostFailure`. Each
+   fixture is admitted by `Policy.admit` for a subject granted the seed's one classification, so the kit
+   certifies the path a host uses: admit, lower, execute, finish. Every fixture therefore ends in a
+   `Limit` within the seed's ceiling, and a slot bound at run time (a sort key or page count from a
+   parameter) is not a fixture, because the policy refuses it before lowering. The fixtures are
+   emitted to `conformance/` stamped with the kit version, and the suite fails when the emitted set and
+   the committed one differ.
+6. **The repository's own leg is armed by configuration and Pending without it.** With
+   `FUARAN_DB_SQLSERVER` set to a connection string, the suite creates a database, seeds it, runs the kit,
+   fails on any unexpected difference, runs the kit again through a dialect that reads a bit as a
+   condition and requires it to go red (the falsifier), and drops the database. Without it the leg is
+   reported as ignored, never failed, and the output says Pending and why. The kit over the in-memory
+   interpreter, through the reference dialect and through this one, is mandatory and agrees on every
+   fixture. **The first recorded run**: SQL Server 2025 LocalDB, 17.0.4025.3 (Express Edition, 64-bit),
+   collation `SQL_Latin1_General_CP1_CI_AS`, 62 fixtures: 61 agreed, 1 differing as pinned
+   (`difference-collation-case`, `CaseInsensitiveCollation`), 0 differing unexpectedly. The float
+   summation fixture agreed on that engine. *Reopen* the subset's claim on the first unexpected
+   difference any host reports.
+
 ## 2026-10-11 — D7: Substrait as a second lowering target, measured and declined (Phase 1908)
 
 The question was whether the provider should also emit Substrait, the serialised relational-algebra format,

@@ -24,6 +24,7 @@
     <Compile Include="PolicyTests.fs" />
     <Compile Include="FingerprintTests.fs" />
     <Compile Include="SubstraitSurveyTests.fs" />
+    <Compile Include="SqlServerTests.fs" />
     <Compile Include="Main.fs" />
   </ItemGroup>
 
@@ -31,11 +32,15 @@
     <PackageReference Update="FSharp.Core" Version="10.1.300" />
     <PackageReference Include="Expecto" Version="10.2.3" />
     <PackageReference Include="Fuaran.Core.Conformance" Version="0.36.0" />
+    <!-- The engine-backed conformance leg's host only (Phase 1901); no package of this repository references a driver. -->
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="7.0.2" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Fuaran.DB\Fuaran.DB.fsproj" />
     <ProjectReference Include="..\..\src\Fuaran.DB.Provider\Fuaran.DB.Provider.fsproj" />
+    <ProjectReference Include="..\..\src\Fuaran.DB.Dialect.SqlServer\Fuaran.DB.Dialect.SqlServer.fsproj" />
+    <ProjectReference Include="..\..\src\Fuaran.DB.Conformance\Fuaran.DB.Conformance.fsproj" />
   </ItemGroup>
 
 </Project>

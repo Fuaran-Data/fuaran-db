@@ -113,11 +113,11 @@ module Probe =
                   ChangeType = column.Type
                   Text =
                     "SELECT "
-                    + d.RenderFunction (Construct.Aggregate Count) [ "*" ]
+                    + d.RenderAggregate Count column.Type "*"
                     + " AS "
                     + q "rows"
                     + ", "
-                    + d.RenderFunction (Construct.Aggregate Max) [ q column.Physical ]
+                    + d.RenderAggregate Max column.Type (q column.Physical)
                     + " AS "
                     + q "maxChange"
                     + " FROM "
