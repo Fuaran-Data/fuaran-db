@@ -1,0 +1,1 @@
+{"$type":"amend","id":"l:rows","kind":{"$type":"limit","maxGroupKeys":0,"maxJoins":2,"maxRows":500,"minGroupSize":5,"name":"cost","timeoutSeconds":30}}

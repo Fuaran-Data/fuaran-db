@@ -14,28 +14,34 @@ public feed, names one contract and is never repacked: a change after that point
 ## What is a contract
 
 - **The public F# surface of `Fuaran.DB`**: the node kinds and their specs, `ModelState`, `ModelOp`,
-  `ModelRejection`, `PipelineRefusal`, `WireError`, `TableDrift`, the reported-schema records, and the
-  functions of `ModelNode`, `Model`, `ModelOps`, `Reads`, `ModelRules`, `PipelineCheck`, `Drift`,
-  `ModelWire` and `AiTools`.
+  `ModelRejection`, `PipelineRefusal`, `WireError`, `TableDrift`, the reported-schema records, the
+  policy's `GrantLevel`, `Grant`, `Subject`, `ColumnRef`, `PolicySite`, `CostLimits`, `PolicyRefusal`,
+  `PolicyRule` and `Admitted`, and the functions of `ModelNode`, `LimitSpec`, `Model`, `ModelOps`,
+  `Reads`, `ModelRules`, `PipelineCheck`, `Policy`, `Drift`, `ModelWire` and `AiTools`.
 - **The public F# surface of `Fuaran.DB.Provider`**: `Construct`, `Scalar`, `Output`, `Pick`,
   `Relation`, `Parameter`, `Statement`, `Dialect`, `Refusal`, `Bindings`, `SplitReport`, `Lowered`,
   `PlacementCase`, and the functions of `Relation`, `Statement`, `Render`, `Refusal`, `Bindings`,
   `FoldSplit` and `PlacementLaws`. Every package in the repository is cut at the one version.
 - **The closed unions are closed on purpose.** A case added to `NodeKind`, `ModelOp`,
-  `ModelRejection`, `PipelineRefusal`, `WireError`, `TableDrift`, `Construct`, `Scalar`, `Relation`,
-  `Pick` or `Refusal` breaks every exhaustive match a consumer has written, so it is a breaking change,
+  `ModelRejection`, `PipelineRefusal`, `WireError`, `TableDrift`, `GrantLevel`, `PolicySite`,
+  `PolicyRefusal`, `PolicyRule`, `Construct`, `Scalar`, `Relation`, `Pick` or `Refusal` breaks every exhaustive match a consumer has written, so it is a breaking change,
   never an additive one, whatever it looks like. A function added to the `Dialect` record breaks every
   dialect, for the same reason.
 - **A field added to a record** breaks every full-literal construction of it, and is breaking too.
 - **The wire format, version 1** (`ModelWire.Version`): the envelope, the `$type` tags, the field
   names, and canonical rendering. The corpus in `wire-fixtures/` is its executable statement; a change
   that moves a vector's bytes is a new wire version.
-- **The codes**: every `DB-*` rule code in `ModelRules.codes`, every `DB-WIRE-*` code from
-  `ModelWire.code`, and the AI surface's tool names and op kinds. A host matches on these; renaming one
+- **The codes**: every `DB-*` rule code in `ModelRules.codes`, every policy refusal code in
+  `Policy.codes`, every `DB-WIRE-*` code from `ModelWire.code`, and the AI surface's tool names and op kinds. A host matches on these; renaming one
   is breaking.
 - **What the check admits.** Making `PipelineCheck.check` or the model rules refuse something they
   admitted is breaking for a consumer whose pipelines passed; admitting something they refused is a
-  change to the security posture and is recorded as a decision before it ships.
+  change to the security posture and is recorded as a decision before it ships. The same holds for
+  `Policy.admit`, and for each rewrite it applies: dropping a rewrite, or admitting a pipeline it
+  refused, is a change to the posture and needs a decision first.
+- **Only an admitted pipeline lowers.** `FoldSplit.lower` and `FoldSplit.explain` take the policy's
+  `Admitted`, which `Policy.admit` alone constructs. Adding a public entry point that lowers a pipeline
+  the policy has not admitted is a change to the posture, never an addition.
 - **What lowers, and the text it lowers to.** The declared subset (DECISIONS.md D4.4) and the shape of
   the statement's form are a contract: lowering less moves work from the database to the host, and
   lowering more is a claim of parity the placement laws must hold and a decision records first. A change
@@ -52,3 +58,25 @@ check, seeding and drift, the wire codec with its corpus, and the AI-tools surfa
 Additive, riding the draft (Phase 1900): the new package `Fuaran.DB.Provider` — the statement and its
 abstract form, the dialect seam, the refusal union, the fold split with `explain`, and the placement
 laws. No dialect ships with it. `Fuaran.DB`'s own surface is unchanged.
+
+Riding the draft (Phase 1902), which no feed holds and nothing has tagged or pinned, so no consumer's
+contract moves. Two of its changes are BREAKING in shape and are recorded as such: they would advance
+the version on a released slot.
+
+- **Breaking — `FoldSplit.lower` and `FoldSplit.explain` change signature**: from
+  `model -> dialect -> source -> pipeline -> bindings` to `Admitted -> dialect -> bindings`. The ungated
+  lowering is internal to the provider; the placement laws keep their public signature and lower
+  through it, so a dialect is certified without being given an ungated entry point.
+- **Breaking — two records gain fields**: `LimitSpec` gains the optional `MaxJoins`, `MaxGroupKeys`,
+  `MinGroupSize` and `TimeoutSeconds`, and `Statement` gains `TimeoutSeconds`. A full-literal
+  construction of either stops compiling; `LimitSpec.rows` builds a limit that declares only its row
+  ceiling.
+- **Additive — the policy**: `Policy.admit` and its vocabulary (the types listed above, `Policy.codes`,
+  `describe`, `attributeRead`, `remedy`, `ruleTag`), and `LimitSpec.fault`, which the model rules and the
+  AI surface now share.
+- **Additive — the wire**: a `limit` node may carry `maxJoins`, `maxGroupKeys`, `minGroupSize` and
+  `timeoutSeconds`, each written only when declared. A limit declaring none renders to the bytes it
+  rendered before, so every existing vector is unchanged; `ops/06-amend.json` is the new one. A
+  decoder older than this draft refuses a limit that declares any of them, by name.
+- **The posture, tightened**: `DB-LIMIT-NONPOSITIVE` now also reports a negative join or grouping cap
+  and a group floor or timeout below one.

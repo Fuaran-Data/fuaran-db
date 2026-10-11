@@ -507,7 +507,7 @@ module PlacementLaws =
                 with ex ->
                     Error ex.Message
 
-            match attempt (fun () -> FoldSplit.lower c.Model dialect c.Source c.Pipeline c.Bindings) with
+            match attempt (fun () -> FoldSplit.lowerUnchecked c.Model dialect c.Source c.Pipeline c.Bindings None) with
             | Error m -> note totalityR (sprintf "%s: the provider threw: %s" at m)
             | Ok(Error whole) ->
                 bump refusals (Refusal.tag whole)
@@ -576,7 +576,10 @@ module PlacementLaws =
                 | Some why -> note requestR (sprintf "%s: %s; text: %s" at why lowered.Statement.Text)
                 | None -> ()
 
-                if FoldSplit.lower c.Model dialect c.Source c.Pipeline c.Bindings <> Ok lowered then
+                if
+                    FoldSplit.lowerUnchecked c.Model dialect c.Source c.Pipeline c.Bindings None
+                    <> Ok lowered
+                then
                     note purityR (sprintf "%s: lowering twice answered two statements" at)
 
                 match attempt (fun () -> placed execute c lowered), attempt (fun () -> reference c) with

@@ -17,7 +17,7 @@ let private model = PlacementLaws.modelOf DecimalType
 let private d = ReferenceDialect.dialect
 
 let private lower (pipeline: Transform list) (bindings: Bindings) =
-    match FoldSplit.lower model d (Ref "orders") pipeline bindings with
+    match FoldSplit.lowerUnchecked model d (Ref "orders") pipeline bindings None with
     | Ok l -> l
     | Error r -> failwithf "refused whole: %s" (Refusal.describe r)
 
@@ -218,7 +218,7 @@ let tests =
           testCase "a source the model cannot read from is refused whole"
           <| fun _ ->
               let refused (source: DataSource) =
-                  match FoldSplit.lower model d source [] Bindings.none with
+                  match FoldSplit.lowerUnchecked model d source [] Bindings.none None with
                   | Error r -> Some r
                   | Ok _ -> None
 
@@ -254,7 +254,7 @@ let tests =
               let offences =
                   PlacementLaws.sample seed iterations
                   |> List.choose (fun c ->
-                      match FoldSplit.lower c.Model d c.Source c.Pipeline c.Bindings with
+                      match FoldSplit.lowerUnchecked c.Model d c.Source c.Pipeline c.Bindings None with
                       | Error _ -> None
                       | Ok l ->
                           textOffence c.Model l.Statement

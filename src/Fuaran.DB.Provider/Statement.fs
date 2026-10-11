@@ -139,6 +139,10 @@ type Statement =
         Columns: Output list
         /// The abstract form `Text` renders.
         Form: Relation
+        /// The statement timeout, in seconds, from the cost limits the pipeline was admitted under
+        /// (DECISIONS.md D5). `Some` on every statement `FoldSplit.lower` answers; `None` only
+        /// from the placement laws, which certify where the split falls and admit nothing.
+        TimeoutSeconds: int option
     }
 
 /// Reading a relation and a statement.

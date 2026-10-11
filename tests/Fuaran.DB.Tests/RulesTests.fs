@@ -114,8 +114,29 @@ let tests =
                   model
                   |> replace "l:rows" (fun n ->
                       { n with
-                          Kind = NodeKind.Limit { Name = "rows"; MaxRows = bad } })
+                          Kind = NodeKind.Limit(LimitSpec.rows "rows" bad) })
                   |> expectOnly ModelRules.LimitNonPositive "l:rows"
+
+          testCase "a cost cap out of range is refused: a negative join or grouping cap, a floor or timeout below one"
+          <| fun _ ->
+              let rows = LimitSpec.rows "rows" 10
+
+              for bad in
+                  [ { rows with MaxJoins = Some -1 }
+                    { rows with MaxGroupKeys = Some -1 }
+                    { rows with MinGroupSize = Some 0 }
+                    { rows with TimeoutSeconds = Some 0 } ] do
+                  model
+                  |> replace "l:rows" (fun n -> { n with Kind = NodeKind.Limit bad })
+                  |> expectOnly ModelRules.LimitNonPositive "l:rows"
+
+              // zero joins and zero grouping keys are caps, not faults
+              Expect.isNone
+                  (LimitSpec.fault
+                      { rows with
+                          MaxJoins = Some 0
+                          MaxGroupKeys = Some 0 })
+                  "a cap of zero admits none"
 
           testCase "duplicate table and column names are refused"
           <| fun _ ->

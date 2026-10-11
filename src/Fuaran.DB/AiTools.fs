@@ -123,15 +123,11 @@ module AiTools =
     /// it lands.
     let private payloadFault (k: NodeKind) : RejectionGuidance option =
         match k with
-        | NodeKind.Limit l when l.MaxRows <= 0 ->
-            Some
-                { Message = sprintf "limit '%s' is %d; a limit must be positive" l.Name l.MaxRows
-                  Alternatives = [] }
+        | NodeKind.Limit l -> LimitSpec.fault l |> Option.map (fun m -> { Message = m; Alternatives = [] })
         | NodeKind.Join j when List.isEmpty j.On ->
             Some
                 { Message = sprintf "join '%s' declares no key pair" j.Name
                   Alternatives = [] }
-        | NodeKind.Limit _
         | NodeKind.Join _
         | NodeKind.Model _
         | NodeKind.Source _

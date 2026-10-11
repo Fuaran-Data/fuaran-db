@@ -21,6 +21,7 @@
     <Compile Include="Exprs.fs" />
     <Compile Include="Rules.fs" />
     <Compile Include="Pipeline.fs" />
+    <Compile Include="Policy.fs" />
     <Compile Include="Drift.fs" />
     <Compile Include="Wire.fs" />
     <Compile Include="AiTools.fs" />

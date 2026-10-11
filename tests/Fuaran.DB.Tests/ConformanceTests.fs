@@ -64,7 +64,13 @@ let genTree (rng: Rng.T) : ModelNode * Rng.T =
                     Kind =
                       NodeKind.Limit
                           { Name = "cap"
-                            MaxRows = 1 + below 1000 }
+                            MaxRows = 1 + below 1000
+                            // the four optional caps, each present about half the time, so the
+                            // wire's round trip is exercised with and without them
+                            MaxJoins = (if below 2 = 0 then Some(below 4) else None)
+                            MaxGroupKeys = (if below 2 = 0 then Some(below 4) else None)
+                            MinGroupSize = (if below 2 = 0 then Some(1 + below 20) else None)
+                            TimeoutSeconds = (if below 2 = 0 then Some(1 + below 600) else None) }
                     Children = [] } ]
 
         { Id = id
@@ -133,7 +139,7 @@ let genOp (rng: Rng.T) : ModelOp * Rng.T =
         // a limit whose bound may not be positive: the policy denies those
         let node =
             { Id = freshId
-              Kind = NodeKind.Limit { Name = "cap"; MaxRows = v - 3 }
+              Kind = NodeKind.Limit(LimitSpec.rows "cap" (v - 3))
               Children = [] }
 
         ModelOp.Add(at, node), r

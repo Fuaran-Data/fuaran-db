@@ -87,7 +87,7 @@ let model: ModelNode =
                   { Name = "revenue"
                     Fn = Sum
                     Column = "c:orders.revenue" })
-          leaf "l:rows" (NodeKind.Limit { Name = "rows"; MaxRows = 100000 }) ] }
+          leaf "l:rows" (NodeKind.Limit(LimitSpec.rows "rows" 100000)) ] }
 
 let state: ModelState = ModelOps.ofRoot model
 

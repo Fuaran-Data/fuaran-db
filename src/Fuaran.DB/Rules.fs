@@ -40,7 +40,8 @@ module ModelRules =
     [<Literal>]
     let ClassificationUndeclared = "DB-CLASSIFICATION-UNDECLARED"
 
-    /// A limit that is not positive.
+    /// A limit whose numbers are out of range: a row ceiling, group floor or timeout that is not
+    /// positive, or a join or grouping cap below zero (`LimitSpec.fault`).
     [<Literal>]
     let LimitNonPositive = "DB-LIMIT-NONPOSITIVE"
 
@@ -270,13 +271,10 @@ module ModelRules =
                               [] ]
                     | Some _
                     | None -> []
-                | NodeKind.Limit l when l.MaxRows <= 0 ->
-                    [ defect
-                          LimitNonPositive
-                          (sprintf "limit '%s' is %d; a limit must be positive" l.Name l.MaxRows)
-                          n.Id
-                          [] ]
-                | NodeKind.Limit _
+                | NodeKind.Limit l ->
+                    LimitSpec.fault l
+                    |> Option.map (fun m -> defect LimitNonPositive m n.Id [])
+                    |> Option.toList
                 | NodeKind.Model _
                 | NodeKind.Source _
                 | NodeKind.Table _

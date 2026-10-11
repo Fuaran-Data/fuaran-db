@@ -95,14 +95,61 @@ type RowPolicySpec =
         Predicate: ColExpr
     }
 
-/// A limit on rows returned: model-wide under the root, or per table under a table.
+/// The cost limits a read is held to: model-wide under the root, or per table under a table. A
+/// read is held to the tightest of the limits declared on the model and on every table it reads
+/// (DECISIONS.md D5). A cap no limit node declares is not unbounded: what it bounds is refused.
 type LimitSpec =
     {
         /// The limit's name.
         Name: string
-        /// The most rows a read may return; must be positive.
+        /// The most rows a read may return; must be positive. A pipeline ends in a `Limit` within it.
         MaxRows: int
+        /// The most joins one pipeline may make; zero or more.
+        MaxJoins: int option
+        /// The most grouping columns one grouping step may name; zero or more.
+        MaxGroupKeys: int option
+        /// The fewest contributing rows an aggregate over an aggregate-only column may answer for;
+        /// positive. A grouping over such a column is rewritten to drop the smaller groups.
+        MinGroupSize: int option
+        /// The statement timeout, in seconds; positive. Carried on every statement lowered.
+        TimeoutSeconds: int option
     }
+
+/// The rule a limit's numbers are held to, which needs no model to decide.
+module LimitSpec =
+
+    /// A limit that declares nothing beyond its row ceiling.
+    let rows (name: string) (maxRows: int) : LimitSpec =
+        { Name = name
+          MaxRows = maxRows
+          MaxJoins = None
+          MaxGroupKeys = None
+          MinGroupSize = None
+          TimeoutSeconds = None }
+
+    /// Why the limit's numbers are out of range, or `None`: the row ceiling, the group floor and the
+    /// timeout must be positive; the join and grouping caps must not be negative.
+    let fault (l: LimitSpec) : string option =
+        let below floor what (v: int option) =
+            match v with
+            | Some n when n < floor ->
+                Some(
+                    sprintf
+                        "limit '%s' declares %s %d; it must be %s"
+                        l.Name
+                        what
+                        n
+                        (if floor = 0 then "zero or more" else "positive")
+                )
+            | Some _
+            | None -> None
+
+        [ below 1 "maxRows" (Some l.MaxRows)
+          below 0 "maxJoins" l.MaxJoins
+          below 0 "maxGroupKeys" l.MaxGroupKeys
+          below 1 "minGroupSize" l.MinGroupSize
+          below 1 "timeoutSeconds" l.TimeoutSeconds ]
+        |> List.tryPick id
 
 /// The model's node kinds — closed.
 [<RequireQualifiedAccess>]

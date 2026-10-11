@@ -1,5 +1,80 @@
 # Fuaran.DB — decisions (newest first)
 
+## 2026-10-11 — D5: policy before lowering (Phase 1902)
+
+What a subject may read is decided on the tree, before any statement exists, by REFUSAL (the pipeline is not
+lowered, and the refusal names the rule, the subject attribute it read and what would satisfy it) and by
+REWRITING (steps added to the pipeline, which a reader can inspect). Ten rulings, each with what would reopen it.
+
+1. **Only an admitted pipeline lowers.** `Policy.admit` answers `Admitted`, whose constructor is private to
+   `Fuaran.DB`; `FoldSplit.lower` and `FoldSplit.explain` take it, and the statement carries its timeout. The
+   ungated lowering is internal to the provider. The placement laws keep their public signature and lower
+   through that internal entry point, so a dialect author outside the assembly certifies a dialect with no
+   access to an ungated lowering and no `InternalsVisibleTo`; only this repository's suite is granted it, to
+   exercise placement on single pipelines. This is neither a public `FoldSplit.Unchecked` (which would make an
+   ungated read expressible again) nor an all-admitting policy under the laws (which would make them certify
+   placement only for pipelines ending in a page). *Reopen if* a dialect author needs to lower ad hoc pipelines
+   outside the laws.
+2. **The subject is a value, and the default is deny.** `Subject` is a principal, its attributes and its grants;
+   the domain resolves no identity. A grant names a classification and a level, `Aggregate` or `RowLevel`.
+   A subject with no grants is refused whole (`DB-GRANT-NONE`), and a column whose classification it holds no
+   grant over is unreadable (`DB-GRANT-COLUMN`). A pipeline that reads no column (a projection to nothing)
+   still answers a row count under the row policy, to any subject holding some grant. *Reopen if* counting a
+   table's rows needs a grant of its own.
+3. **A read is followed to the model column it came from.** Every step's reads are walked with each name's
+   lineage (renames, derivations, aggregates, a join's `_right` suffix), so a column read only inside a
+   predicate counts, a renamed one is still itself, and every column of the RESULT is a read: a pipeline with
+   no projection reads everything. A join's right keys are reads; `Distinct` and the set operations read every
+   column of both rows they compare. What a rewrite reads (a row policy, a floor count) is the model's read,
+   not the subject's.
+4. **Aggregate-only means aggregate input only.** A column the subject holds at `Aggregate` may be carried by a
+   `Project` or `Derive` and folded into a `GroupBy` aggregate other than `First` and `Last` (each answers one
+   row's value). Any row-wise use is refused (`DB-GRANT-AGGREGATE-ONLY`) and named: a predicate, a grouping or
+   join key, a sort key, a window or pivot input, a row compared whole, a result column. That includes a filter
+   ahead of an aggregate, which is conservative. *Reopen if* a filter on an aggregate-only column ahead of a
+   floored aggregate is wanted, with the argument that the floor covers it.
+5. **The group floor is a rewrite.** A grouping that aggregates an aggregate-only column gains one `Count` per
+   such input column (the evaluator's `Count` counts present cells, so it is the number of contributors), a
+   `Filter` keeping groups at or above the model's floor, and a `Project` back to the written columns. Without a
+   declared floor it is refused (`DB-GROUP-FLOOR-UNDECLARED`). An aggregate over already-aggregated columns needs
+   no second floor. `Min` and `Max` over a group at the floor still answer one row's value; that is recorded, not
+   prevented. *Reopen* with a model-declared rule naming the aggregates a classification admits.
+6. **A row policy is a model predicate over the subject's attributes.** A policy's `Param`s name subject
+   attributes and are substituted as values before the policy is applied, so a request's bindings never reach
+   it; an attribute the subject lacks is refused, naming it (`DB-ROW-POLICY-ATTRIBUTE`). The source's policies
+   are the first steps of the admitted pipeline. A joined table's are a `Filter` immediately after an INNER join,
+   under the names the join gives its columns, which is equivalent to filtering the table first. A table with a
+   policy brought in by any other join kind or by a set operation is refused (`DB-ROW-POLICY-UNWRAPPABLE`): a
+   `DataSource` has no wrapped form, and a filter after a left, semi or anti join or a set operation cannot remove
+   the rows that decided it. *Reopen when* the transform algebra gains an operand that wraps a source.
+7. **Cost limits are model declarations on the limit node.** `LimitSpec` gains `MaxJoins`, `MaxGroupKeys`,
+   `MinGroupSize` and `TimeoutSeconds`, each optional and written on the wire only when declared, so no existing
+   vector moved. A read is held to the tightest of the limits on the model and on every table it reads. The row
+   ceiling and the timeout are required (`DB-COST-CEILING-UNDECLARED`, `DB-COST-TIMEOUT-UNDECLARED`); a join or
+   grouping cap no limit declares admits none (`DB-COST-JOINS`, `DB-COST-GROUP-KEYS`). The pipeline must end in a
+   `Limit` within the ceiling, with only steps that cannot add rows after it (`DB-COST-LIMIT-MISSING`); its count
+   must be literal (`DB-COST-LIMIT-UNBOUND`) and within the ceiling (`DB-COST-LIMIT-CEILING`). Joins are counted
+   per `Join` step; grouping keys per `GroupBy` and per `Pivot` index. *Reopen if* set operations need a cap of
+   their own.
+8. **The verdict carries its record.** `Admitted` holds the written pipeline, the rewritten one, the limits, and
+   every rule applied in order: the columns granted with the level that admitted each, each row policy with its
+   substituted predicate and its position, each floor, and the cost admitted. Phase 1903's connection record
+   carries it as data.
+9. **The refusals are one closed union with stable codes** (`Policy.codes`), decided in a fixed order: grants
+   held, the pipeline against the model (`DB-PIPELINE`, wrapping the check's own refusal), the column grants
+   step by step and then the result, the group floor, the row policies, the cost limits. `Policy.describe`
+   says the rule, what it found, the subject attribute it read (`attributeRead`) and what would satisfy it
+   (`remedy`).
+10. **The laws live in the suite, over a generated sample with adequacy.** Over (model variant, subject,
+    pipeline) cases: admission is total and pure; every admitted pipeline checks against the model; a row
+    policy survives every admitted pipeline (the rows it excludes change nothing the pipeline answers, a
+    pipeline that tries to filter it away among them); every aggregate over an aggregate-only column is
+    followed by its floor; every admitted pipeline lowers with its timeout and its placement answers what it
+    answers. Sample adequacy demands every refusal code and every rewrite (the row policy at the source and
+    after a join, and the floor), and was seen red at six iterations. The row-policy law and the floor law were
+    seen red with the policy and the floor stripped; those falsifiers are permanent tests. *Reopen* to publish
+    the laws as a package validator when a host composes its own policy.
+
 ## 2026-10-11 — D4: the provider and the fold split (Phase 1900)
 
 The second package, `Fuaran.DB.Provider`: a pure function from a dataset model, a dialect, a pipeline and its

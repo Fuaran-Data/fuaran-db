@@ -99,7 +99,17 @@ module ModelWire =
               "on", JArr(s.On |> List.map (fun (l, r) -> JObj [ "left", JStr l; "right", JStr r ])) ]
         | NodeKind.Measure s -> [ "name", JStr s.Name; "fn", JStr(aggTag s.Fn); "column", JStr s.Column ]
         | NodeKind.RowPolicy s -> [ "name", JStr s.Name; "predicate", DataFrameCodec.encodeExpr s.Predicate ]
-        | NodeKind.Limit s -> [ "name", JStr s.Name; "maxRows", JInt s.MaxRows ]
+        | NodeKind.Limit s ->
+            // The four caps are optional and written only when declared, so a limit that declares
+            // none renders to the bytes it rendered before they existed (DECISIONS.md D5).
+            let optional (name: string) (v: int option) =
+                v |> Option.map (fun n -> name, JInt n) |> Option.toList
+
+            [ "name", JStr s.Name; "maxRows", JInt s.MaxRows ]
+            @ optional "maxJoins" s.MaxJoins
+            @ optional "maxGroupKeys" s.MaxGroupKeys
+            @ optional "minGroupSize" s.MinGroupSize
+            @ optional "timeoutSeconds" s.TimeoutSeconds
 
     let private isContainerTag (tag: string) =
         not (List.isEmpty (ModelNode.allowedChildren tag))
@@ -177,6 +187,13 @@ module ModelWire =
             | JInt i -> Ok i
             | _ -> Error(WireError.WrongShape(path + "." + name, "an integer")))
 
+    /// An optional integer field: absent is None; present must be an integer.
+    let private optInt (path: string) (name: string) (fs: (string * JVal) list) : Result<int option, WireError> =
+        match fs |> List.tryFind (fun (k, _) -> k = name) with
+        | None -> Ok None
+        | Some(_, JInt i) -> Ok(Some i)
+        | Some _ -> Error(WireError.WrongShape(path + "." + name, "an integer"))
+
     let private arr (path: string) (name: string) fs : Result<JVal list, WireError> =
         field path name fs
         |> Result.bind (fun v ->
@@ -217,7 +234,13 @@ module ModelWire =
         | "join" -> [ "name"; "left"; "right"; "on" ]
         | "measure" -> [ "name"; "fn"; "column" ]
         | "rowPolicy" -> [ "name"; "predicate" ]
-        | "limit" -> [ "name"; "maxRows" ]
+        | "limit" ->
+            [ "name"
+              "maxRows"
+              "maxJoins"
+              "maxGroupKeys"
+              "minGroupSize"
+              "timeoutSeconds" ]
         | _ -> []
 
     let private pairOf (path: string) (v: JVal) : Result<string * string, WireError> =
@@ -310,7 +333,19 @@ module ModelWire =
             result {
                 let! name = str path "name" fs
                 let! maxRows = intField path "maxRows" fs
-                return NodeKind.Limit { Name = name; MaxRows = maxRows }
+                let! maxJoins = optInt path "maxJoins" fs
+                let! maxGroupKeys = optInt path "maxGroupKeys" fs
+                let! minGroupSize = optInt path "minGroupSize" fs
+                let! timeoutSeconds = optInt path "timeoutSeconds" fs
+
+                return
+                    NodeKind.Limit
+                        { Name = name
+                          MaxRows = maxRows
+                          MaxJoins = maxJoins
+                          MaxGroupKeys = maxGroupKeys
+                          MinGroupSize = minGroupSize
+                          TimeoutSeconds = timeoutSeconds }
             }
         | other -> Error(WireError.UnknownKind(path + ".$type", other, ModelNode.allKindTags))
 

@@ -86,16 +86,19 @@ module FoldSplit =
                 else
                     Ok(node, spec)
 
-    /// Lower `pipeline` over `source` against `model` through `dialect`. `Error` only when no
-    /// statement can be written at all (the source is embedded, unmodelled, or has no columns);
-    /// otherwise the statement for the longest lowerable prefix of the planned pipeline, the steps
-    /// left to run locally, and the rule that stopped the prefix.
-    let lower
+    /// Lower `pipeline` over `source` against `model` through `dialect`, with no policy: the
+    /// placement laws' entry point, internal so that nothing outside this assembly lowers a pipeline
+    /// the policy has not admitted (DECISIONS.md D5). `Error` only when no statement can be written
+    /// at all (the source is embedded, unmodelled, or has no columns); otherwise the statement for the
+    /// longest lowerable prefix of the planned pipeline, the steps left to run locally, and the rule
+    /// that stopped the prefix.
+    let internal lowerUnchecked
         (model: ModelNode)
         (dialect: Dialect)
         (source: DataSource)
         (pipeline: Transform list)
         (bindings: Bindings)
+        (timeoutSeconds: int option)
         : Result<Lowered, Refusal> =
         sourceTable model source
         |> Result.map (fun (node, spec) ->
@@ -127,23 +130,27 @@ module FoldSplit =
                           Type = ty
                           DialectType = dialect.MapType ty })
                   Columns = Relation.outputs form
-                  Form = form }
+                  Form = form
+                  TimeoutSeconds = timeoutSeconds }
               Suffix = List.skip lowered report.Planned
               Split =
                 { Plan = report
                   Lowered = lowered
                   Boundary = boundary } })
 
-    /// The split alone: where the boundary falls in the planned pipeline, and the rule that put it
-    /// there.
-    let explain
-        (model: ModelNode)
-        (dialect: Dialect)
-        (source: DataSource)
-        (pipeline: Transform list)
-        (bindings: Bindings)
-        : Result<SplitReport, Refusal> =
-        lower model dialect source pipeline bindings |> Result.map _.Split
+    /// Lower an ADMITTED pipeline through `dialect`: the pipeline the policy rewrote, over its source,
+    /// against its model, the statement carrying the admitted timeout. A pipeline reaches a statement
+    /// only through `Policy.admit`, so an ungated read is not expressible (DECISIONS.md D5). `Error`
+    /// only when no statement can be written at all (the source is embedded, unmodelled, or has no
+    /// columns); otherwise the statement for the longest lowerable prefix of the planned pipeline, the
+    /// steps left to run locally, and the rule that stopped the prefix.
+    let lower (admitted: Admitted) (dialect: Dialect) (bindings: Bindings) : Result<Lowered, Refusal> =
+        lowerUnchecked admitted.Model dialect admitted.Source admitted.Pipeline bindings (Some admitted.TimeoutSeconds)
+
+    /// The split alone: where the boundary falls in the admitted pipeline as planned, and the rule
+    /// that put it there.
+    let explain (admitted: Admitted) (dialect: Dialect) (bindings: Bindings) : Result<SplitReport, Refusal> =
+        lower admitted dialect bindings |> Result.map _.Split
 
     /// The split as sentences: what the planner rewrote, which steps lower, and where the boundary
     /// fell and why.

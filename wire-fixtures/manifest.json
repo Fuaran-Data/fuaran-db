@@ -13,8 +13,8 @@
       "id": "ops",
       "kind": "accept-op",
       "path": "ops",
-      "vectors": 5,
-      "description": "One op per kind: add (a leaf and a subtree), amend (a rename, a limit), retire."
+      "vectors": 6,
+      "description": "One op per kind: add (a leaf and a subtree), amend (a rename, a limit), retire; then an amend to a limit declaring every optional cost cap (Phase 1902), whose four fields are written only when declared."
     },
     {
       "id": "rejects",

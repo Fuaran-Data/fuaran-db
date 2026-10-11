@@ -17,6 +17,12 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- The suite exercises placement directly through the internal ungated lowering; nothing else
+         outside this assembly can reach it (DECISIONS.md D5). The placement laws stay public. -->
+    <InternalsVisibleTo Include="Fuaran.DB.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Compile Include="Statement.fs" />
     <Compile Include="Dialect.fs" />
     <Compile Include="Refusal.fs" />

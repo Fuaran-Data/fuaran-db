@@ -22,8 +22,19 @@ let sampleOps: ModelOp list =
                 Type = DecimalType
                 Classification = "public" }
       )
-      ModelOp.Amend("l:rows", NodeKind.Limit { Name = "rows"; MaxRows = 500 })
-      ModelOp.Retire "j:orders-customers" ]
+      ModelOp.Amend("l:rows", NodeKind.Limit(LimitSpec.rows "rows" 500))
+      ModelOp.Retire "j:orders-customers"
+      // last, so the vectors before it keep their numbers: a limit declaring every cost cap
+      ModelOp.Amend(
+          "l:rows",
+          NodeKind.Limit
+              { Name = "cost"
+                MaxRows = 500
+                MaxJoins = Some 2
+                MaxGroupKeys = Some 0
+                MinGroupSize = Some 5
+                TimeoutSeconds = Some 30 }
+      ) ]
 
 [<Tests>]
 let tests =
@@ -54,10 +65,34 @@ let tests =
 
           testCase "the encoding is canonical: keys sorted, $type first"
           <| fun _ ->
-              let text =
-                  ModelWire.encodeNode (leaf "l:x" (NodeKind.Limit { Name = "x"; MaxRows = 5 }))
+              let text = ModelWire.encodeNode (leaf "l:x" (NodeKind.Limit(LimitSpec.rows "x" 5)))
 
               Expect.equal text """{"$type":"limit","id":"l:x","maxRows":5,"name":"x"}""" "the bytes"
+
+          testCase "a limit's cost caps are optional: written only when declared, and an integer when present"
+          <| fun _ ->
+              let text =
+                  """{"$type":"limit","id":"l:x","maxJoins":1,"maxRows":5,"name":"x","timeoutSeconds":9}"""
+
+              match ModelWire.decodeNode text with
+              | Ok n ->
+                  Expect.equal
+                      n.Kind
+                      (NodeKind.Limit
+                          { LimitSpec.rows "x" 5 with
+                              MaxJoins = Some 1
+                              TimeoutSeconds = Some 9 })
+                      "the declared caps, and None for the rest"
+
+                  Expect.equal (ModelWire.encodeNode n) text "re-encodes to its own bytes"
+              | Error e -> failtestf "%s" (ModelWire.describe e)
+
+              Expect.equal
+                  (codeOf (
+                      ModelWire.decodeNode """{"$type":"limit","id":"l:x","maxRows":5,"minGroupSize":"5","name":"x"}"""
+                  ))
+                  "DB-WIRE-WRONG-SHAPE"
+                  "a cap that is not an integer"
 
           testCase "decoding is strict, and each refusal is named"
           <| fun _ ->
