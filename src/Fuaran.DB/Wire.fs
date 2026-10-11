@@ -482,6 +482,9 @@ module ModelWire =
     /// A node (and its subtree) from a `JVal`.
     let decodeNodeJson (v: JVal) : Result<ModelNode, WireError> = decodeNodeAt "$" v
 
+    /// A node from a `JVal` nested at `path`, so a refusal names where in the enclosing text it is.
+    let internal decodeNodeAtPath (path: string) (v: JVal) : Result<ModelNode, WireError> = decodeNodeAt path v
+
     /// A model state from a `JVal`.
     let decodeStateJson (v: JVal) : Result<ModelState, WireError> =
         let path = "$"

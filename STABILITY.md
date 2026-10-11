@@ -16,10 +16,12 @@ public feed, names one contract and is never repacked: a change after that point
 - **The public F# surface of `Fuaran.DB`**: the node kinds and their specs, `ModelState`, `ModelOp`,
   `ModelRejection`, `PipelineRefusal`, `WireError`, `TableDrift`, the reported-schema records, the
   policy's `GrantLevel`, `Grant`, `Subject`, `ColumnRef`, `PolicySite`, `CostLimits`, `PolicyRefusal`,
-  `PolicyRule` and `Admitted`, the fingerprint's `FingerprintMethod`, `FingerprintKind`,
+  `PolicyRule` and `Admitted`, the projection's `ProjectedModel`, `ProjectionRefusal`, `ProjectionChange`
+  and `ProjectionDrift`, the fingerprint's `FingerprintMethod`, `FingerprintKind`,
   `FingerprintDisclosure`, `TableReading`, `FileReading`, `FingerprintReading` and `FingerprintVerdict`,
   and the functions of `ModelNode`, `LimitSpec`, `Model`, `ModelOps`, `Reads`, `ModelRules`,
-  `PipelineCheck`, `Policy`, `Fingerprint`, `Drift`, `ModelWire` and `AiTools`.
+  `PipelineCheck`, `Policy`, `ModelProjection` (with `ModelProjection.Laws` and its `Case`), `Fingerprint`,
+  `Drift`, `ModelWire` and `AiTools`.
 - **The public F# surface of `Fuaran.DB.Provider`**: `Construct`, `Scalar`, `Output`, `Pick`,
   `Relation`, `Parameter`, `Statement`, `Dialect`, `Refusal`, `Bindings`, `SplitReport`, `Lowered`,
   `PlacementCase`, `TableProbe`, `Probe`, `ProbeRefusal`, and the functions of `Relation`, `Statement`,
@@ -35,7 +37,7 @@ public feed, names one contract and is never repacked: a change after that point
   purpose, as above.
 - **The closed unions are closed on purpose.** A case added to `NodeKind`, `ModelOp`,
   `ModelRejection`, `PipelineRefusal`, `WireError`, `TableDrift`, `GrantLevel`, `PolicySite`,
-  `PolicyRefusal`, `PolicyRule`, `FingerprintMethod`, `FingerprintKind`, `FingerprintReading`,
+  `PolicyRefusal`, `PolicyRule`, `ProjectionRefusal`, `ProjectionChange`, `FingerprintMethod`, `FingerprintKind`, `FingerprintReading`,
   `FingerprintVerdict`, `ResultDigest`, `WithheldPart`, `SessionOp`, `Verdict`, `Recorded`, `Outcome`,
   `SessionRejection`, `SessionReadFault`, `RunFailure`, `ReplayVerdict`, `Construct`, `Scalar`, `Relation`, `Pick`, `Refusal`, `Probe` or `ProbeRefusal` breaks every exhaustive match a consumer has written, so it is a breaking change,
   never an additive one, whatever it looks like. A function added to the `Dialect` record breaks every
@@ -46,7 +48,7 @@ public feed, names one contract and is never repacked: a change after that point
   that moves a vector's bytes is a new wire version.
 - **The codes**: every `DB-*` rule code in `ModelRules.codes`, every policy refusal code in
   `Policy.codes`, every `DB-WIRE-*` code from `ModelWire.code`, every `DB-PROBE-*` code from `Probe.code`,
-  every `DB-SESSION-*` code from `SessionOps.code`, `SessionWire.faultCode` and a recorded `Failed` op,
+  `DB-PROJECTION-WITHHELD` from `ModelProjection.code`, every `DB-SESSION-*` code from `SessionOps.code`, `SessionWire.faultCode` and a recorded `Failed` op,
   and the AI surface's tool names and op kinds. A host matches on these; renaming one
   is breaking.
 - **What the check admits.** Making `PipelineCheck.check` or the model rules refuse something they
@@ -65,6 +67,12 @@ public feed, names one contract and is never repacked: a change after that point
   a change to the posture and needs a decision first. The session wire (op tags, member names, canonical
   rendering, SHA-256 chain) is stated by `wire-fixtures/session/`, and moving a vector's bytes is a new wire
   version. The statement hash's pre-image is a contract: changing it changes every recorded hash.
+- **What a projection carries, and what it admits.** What `ModelProjection.project` keeps and drops
+  (DECISIONS.md D10.1 to D10.3) is part of the security posture: carrying anything more is a change to the
+  posture and needs a decision first, and so is making `ModelProjection.admits` admit a pipeline it
+  refused. The projection wire (`ModelProjection.Version`, the `modelProjection` envelope and its grant
+  tags) is stated by `wire-fixtures/projections/`; moving a vector's bytes is a new wire version, and it
+  moves every pinned projection's hash.
 - **What lowers, and the text it lowers to.** The declared subset (DECISIONS.md D4.4) and the shape of
   the statement's form are a contract: lowering less moves work from the database to the host, and
   lowering more is a claim of parity the placement laws must hold and a decision records first. A change
@@ -164,3 +172,20 @@ is recorded as such. It would advance the version on a released slot.
   (`account`), the capture and replay (`captures`, `replayExecutor`, `replay`), the export (`Export.wire`,
   `statement`, `pae`, `sign`, `envelope`) and the laws (`StreamLaws.laws`). The corpus gains
   `wire-fixtures/session/`: one op per kind, two worked streams, and nine reader refusals.
+
+Riding the draft (Phase 1907), on the same terms: the model projected per peer. Nothing is BREAKING in
+shape; every change is an addition, and the dependency set grows by one released package.
+
+- **Additive — the projection**: `ProjectedModel`, `ProjectionRefusal`, `ProjectionChange` and
+  `ProjectionDrift`, and the `ModelProjection` module (`project`, `fault`, `admits`, `code`, `describe`,
+  `Version`, `encodeJson`, `encode`, `hash`, `decodeJson`, `decode`, `isBreaking`, `drift`) with its laws
+  (`ModelProjection.Laws`: `Case`, `classifications`, `sample`, `verdictTags`, `shapeTags`, `laws`).
+- **Additive — the policy**: `Policy.columns`, the column authorisation alone, which `Policy.admit` now
+  runs first, and `Policy.level`, how far a grant list reaches a classification. `Policy.admit` admits and
+  refuses exactly what it did, in the same order.
+- **Additive — the wire**: a second envelope, `modelProjection`, version 1. The corpus gains
+  `wire-fixtures/projections/`: three accept vectors and eight refusals. Every existing vector, and the
+  emitted `conformance/` set, keeps its bytes.
+- **Additive — a dependency**: `Fuaran.DB` now references the released `Fuaran.Core.Conformance` 0.36.0,
+  which the provider and the session package already reference, for the laws' generator and adequacy
+  guard.

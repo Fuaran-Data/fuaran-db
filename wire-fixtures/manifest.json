@@ -43,6 +43,20 @@
       "path": "session/rejects.json",
       "vectors": 9,
       "description": "Session texts the reader refuses, each with its code: a torn tail, a rewound head (against the head the vector names), a broken chain, a verified chain the reducer refuses, and op texts the codec refuses."
+    },
+    {
+      "id": "projections",
+      "kind": "accept-projection",
+      "path": "projections/accept",
+      "vectors": 3,
+      "description": "The model projected per peer (Phase 1907): the worked retail model projected for a subject with nothing, for one reading public columns row by row, and for one also reading personal columns in aggregate. No physical identifier, row policy, limit or withheld classification appears in any of them."
+    },
+    {
+      "id": "projection-rejects",
+      "kind": "reject",
+      "path": "projections/rejects.json",
+      "vectors": 8,
+      "description": "Texts the projection codec refuses, each with its code: four that decode as a model but are not a projection (a physical identifier, a row policy, the whole model, a grant over a classification the model does not declare), an unknown grant level, another version, a missing field, and a dataset model state."
     }
   ]
 }

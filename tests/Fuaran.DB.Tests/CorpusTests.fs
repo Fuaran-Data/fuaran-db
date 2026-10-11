@@ -92,6 +92,7 @@ let private decodeAs (kind: string) (text: string) : Result<string, WireError> =
     | "op" -> ModelWire.decodeOp text |> Result.map ModelWire.encodeOp
     | "node" -> ModelWire.decodeNode text |> Result.map ModelWire.encodeNode
     | "session-op" -> SessionWire.decodeOp text |> Result.map SessionWire.encodeOp
+    | "projection" -> ModelProjection.decode text |> Result.map ModelProjection.encode
     | other -> failwithf "unknown vector kind '%s'" other
 
 /// One session reject vector: a session's wire, the head the reader holds, and the code.
@@ -145,7 +146,8 @@ let tests =
                       | "accept-state"
                       | "accept-op"
                       | "accept-session-op"
-                      | "accept-session" -> List.length (acceptFiles f)
+                      | "accept-session"
+                      | "accept-projection" -> List.length (acceptFiles f)
                       | "reject" -> List.length (rejects f)
                       | "reject-session" -> List.length (sessionRejects f)
                       | other -> failtestf "unknown family kind '%s'" other

@@ -349,7 +349,20 @@ module Policy =
         else
             cols @ [ name, lin ]
 
-    let private tableFlow (node: ModelNode) (spec: TableSpec) : Flow =
+    /// The lineage of the columns a projection withholds from `table`: one column no grant can name,
+    /// classified `mark`, which the projection's own grants never hold (Phase 1907).
+    let private withheldLin (mark: string) (table: string) : Lin =
+        { Raw =
+            Set.singleton
+                { Table = table
+                  Column = ""
+                  Classification = mark }
+          Agg = Set.empty }
+
+    /// A table's columns as a read of it starts. Under a projection (`mark`), the table may hold columns
+    /// the projection withholds, so a read of it carries them as the walk's `Rest`: a use of every
+    /// column of the rows meets them, and a projection to named columns drops them.
+    let private tableFlow (mark: string option) (node: ModelNode) (spec: TableSpec) : Flow =
         { Cols =
             Model.columns node
             |> List.map (fun (_, c) ->
@@ -360,13 +373,13 @@ module Policy =
                           Column = c.Name
                           Classification = c.Classification }
                   Agg = Set.empty })
-          Rest = None }
+          Rest = mark |> Option.map (fun m -> withheldLin m spec.Name) }
 
-    let private operandFlow (model: ModelNode) (source: DataSource) : Flow =
+    let private operandFlow (mark: string option) (model: ModelNode) (source: DataSource) : Flow =
         match source with
         | Ref name ->
             match Model.tryTable name model with
-            | Some(node, spec) -> tableFlow node spec
+            | Some(node, spec) -> tableFlow mark node spec
             | None -> { Cols = []; Rest = None }
         | Embedded _ -> { Cols = []; Rest = None }
 
@@ -374,8 +387,14 @@ module Policy =
     let private rightName (leftNames: string list) (c: string) =
         if List.contains c leftNames then c + "_right" else c
 
+    let private joinRest (a: Lin option) (b: Lin option) : Lin option =
+        match a, b with
+        | Some x, Some y -> Some(join x y)
+        | Some _, None -> a
+        | None, _ -> b
+
     /// The lineage flowing out of one step.
-    let private advance (model: ModelNode) (flow: Flow) (step: Transform) : Flow =
+    let private advance (mark: string option) (model: ModelNode) (flow: Flow) (step: Transform) : Flow =
         match step with
         | Filter _
         | Sort _
@@ -384,7 +403,7 @@ module Policy =
         | Intersect _
         | Except _ -> flow
         | Union source ->
-            let other = operandFlow model source
+            let other = operandFlow mark model source
 
             { flow with
                 Cols = flow.Cols |> List.map (fun (n, l) -> n, join l (linOf other n)) }
@@ -411,12 +430,27 @@ module Policy =
             | Right
             | Outer ->
                 let leftNames = flow.Cols |> List.map fst
+                let other = operandFlow mark model source
 
-                { flow with
-                    Cols =
-                        flow.Cols
-                        @ ((operandFlow model source).Cols
-                           |> List.map (fun (n, l) -> rightName leftNames n, l)) }
+                // Under a projection the withheld columns take part in the evaluator's renaming too,
+                // so a right column's name may, over the full table, name a withheld column instead:
+                // any name when the left rows carry withheld columns, and a `_right` name when the
+                // right table does. Such a name carries the withheld lineage, so reading it is refused.
+                let taint (name: string) (l: Lin) =
+                    match mark with
+                    | None -> l
+                    | Some _ ->
+                        [ flow.Rest; (if name.EndsWith "_right" then other.Rest else None) ]
+                        |> List.choose id
+                        |> List.fold join l
+
+                { Cols =
+                    flow.Cols
+                    @ (other.Cols
+                       |> List.map (fun (n, l) ->
+                           let named = rightName leftNames n
+                           named, taint named l))
+                  Rest = joinRest flow.Rest other.Rest }
         | Window spec ->
             { flow with
                 Cols =
@@ -442,7 +476,7 @@ module Policy =
         | AggInput
         | Expose of string
 
-    let private uses (model: ModelNode) (flow: Flow) (step: Transform) : (Lin * Use) list =
+    let private uses (mark: string option) (model: ModelNode) (flow: Flow) (step: Transform) : (Lin * Use) list =
         let names (u: Use) (ns: string list) =
             ns |> List.map (fun n -> linOf flow n, u)
 
@@ -467,7 +501,7 @@ module Policy =
                    | StdDev
                    | CountDistinct -> AggInput))
         | Join(source, on, _) ->
-            let other = operandFlow model source
+            let other = operandFlow mark model source
 
             names (Expose "a join key") (on |> List.map fst)
             @ (on |> List.map (fun (_, r) -> linOf other r, Expose "a join key"))
@@ -486,12 +520,14 @@ module Policy =
         | Union source
         | Intersect source
         | Except source ->
-            (everything flow @ everything (operandFlow model source))
+            (everything flow @ everything (operandFlow mark model source))
             |> List.map (fun l -> l, Expose "part of a row compared whole")
 
-    let private levelOf (subject: Subject) (classification: string) : GrantLevel option =
+    /// How far `grants` reach a classification: row by row when any grant over it says so, in aggregate
+    /// when one does and none says more, and not at all when none names it.
+    let level (grants: Grant list) (classification: string) : GrantLevel option =
         let levels =
-            subject.Grants
+            grants
             |> List.filter (fun g -> g.Classification = classification)
             |> List.map _.Level
 
@@ -515,7 +551,7 @@ module Policy =
             (fun acc c ->
                 acc
                 |> Result.bind (fun seen ->
-                    match levelOf subject c.Classification with
+                    match level subject.Grants c.Classification with
                     | None -> Error(PolicyRefusal.ColumnNotGranted(at, c, granted))
                     | Some GrantLevel.Aggregate when lin.Raw.Contains c ->
                         match how with
@@ -528,11 +564,12 @@ module Policy =
     let private aggregateOnly (subject: Subject) (lin: Lin) : ColumnRef list =
         lin.Raw
         |> Set.toList
-        |> List.filter (fun c -> levelOf subject c.Classification = Some GrantLevel.Aggregate)
+        |> List.filter (fun c -> level subject.Grants c.Classification = Some GrantLevel.Aggregate)
 
     /// The written pipeline walked against the grants: every column it admitted, and, per grouping
     /// step that aggregates an aggregate-only column, the `Of` columns that need a count.
     let private grants
+        (mark: string option)
         (model: ModelNode)
         (subject: Subject)
         (start: Flow)
@@ -551,7 +588,7 @@ module Policy =
                     |> Result.bind (fun (flow, admitted, floors) ->
                         let at = PolicySite.Step(i + 1)
 
-                        uses model flow step
+                        uses mark model flow step
                         |> List.fold
                             (fun inner u ->
                                 inner
@@ -588,7 +625,7 @@ module Policy =
                                 | Intersect _
                                 | Except _ -> floors
 
-                            advance model flow step, admitted, floors)))
+                            advance mark model flow step, admitted, floors)))
                 (Ok(start, [], Map.empty))
 
         folded
@@ -897,16 +934,16 @@ module Policy =
 
     // ---- admission ----
 
-    /// Decide what `subject` may read of `pipeline` over `source`, against `model`. `Ok` is the
-    /// admitted pipeline with every rule applied; `Error` the first refusal, in this order: grants
-    /// held, the pipeline against the model, the column grants step by step and then the result,
-    /// the group floor, the row policies, the cost limits.
-    let admit
+    /// The column authorisation, the first half of admission: grants held, the pipeline against the
+    /// model, then the column grants step by step and the result. `Ok` carries the source table, every
+    /// column admitted with its level, and the grouping steps that need a floor.
+    let private authorise
+        (mark: string option)
         (model: ModelNode)
         (subject: Subject)
         (source: DataSource)
         (pipeline: Transform list)
-        : Result<Admitted, PolicyRefusal> =
+        =
         if List.isEmpty subject.Grants then
             Error(PolicyRefusal.NoGrants subject.Principal)
         else
@@ -929,92 +966,134 @@ module Policy =
                         )
                     | Some(node, spec) -> Ok(node, spec))
             |> Result.bind (fun (sourceNode, sourceSpec) ->
-                let operands =
-                    pipeline
-                    |> List.choose Reads.operandOf
-                    |> List.choose (fun s ->
-                        match s with
-                        | Ref n -> Model.tryTable n model
-                        | Embedded _ -> None)
+                grants mark model subject (tableFlow mark sourceNode sourceSpec) pipeline
+                |> Result.map (fun (admitted, floors) -> (sourceNode, sourceSpec), admitted, floors))
 
-                let tables =
-                    ((sourceNode, sourceSpec) :: operands) |> List.distinctBy (fun (n, _) -> n.Id)
+    /// The column authorisation alone (`validator:Fuaran.DB.Policy.ColumnGrants`): whether `subject`'s
+    /// grants admit every column `pipeline` reads over `source`, and how far. `Ok` carries each column
+    /// admitted with its level; `Error` the first refusal, in `admit`'s order. It applies no cost, group
+    /// floor or row policy, so a pipeline it admits may still be refused by `admit`.
+    let columns
+        (model: ModelNode)
+        (subject: Subject)
+        (source: DataSource)
+        (pipeline: Transform list)
+        : Result<(ColumnRef * GrantLevel) list, PolicyRefusal> =
+        authorise None model subject source pipeline
+        |> Result.map (fun (_, admitted, _) -> admitted)
 
-                let start = tableFlow sourceNode sourceSpec
-                let costVerdict, floor = cost model tables pipeline
+    /// The column authorisation over a projection (Phase 1907): as `columns`, except that every table
+    /// may hold columns the projection withholds. Their lineage carries one column classified `mark`,
+    /// which the caller chooses so that no grant names it: a use that may read one is refused as
+    /// `ColumnNotGranted` with that column, which the caller reports as withheld.
+    let internal columnsWithheld
+        (mark: string)
+        (model: ModelNode)
+        (subject: Subject)
+        (source: DataSource)
+        (pipeline: Transform list)
+        : Result<(ColumnRef * GrantLevel) list, PolicyRefusal> =
+        authorise (Some mark) model subject source pipeline
+        |> Result.map (fun (_, admitted, _) -> admitted)
 
-                grants model subject start pipeline
-                |> Result.bind (fun (admitted, floors) ->
-                    let first =
-                        floors
-                        |> Map.toList
-                        |> List.tryPick (fun (step, (_, _, needs)) ->
-                            needs |> List.collect snd |> List.tryHead |> Option.map (fun c -> step, c))
+    /// Decide what `subject` may read of `pipeline` over `source`, against `model`. `Ok` is the
+    /// admitted pipeline with every rule applied; `Error` the first refusal, in this order: grants
+    /// held, the pipeline against the model, the column grants step by step and then the result,
+    /// the group floor, the row policies, the cost limits.
+    let admit
+        (model: ModelNode)
+        (subject: Subject)
+        (source: DataSource)
+        (pipeline: Transform list)
+        : Result<Admitted, PolicyRefusal> =
+        authorise None model subject source pipeline
+        |> Result.bind (fun ((sourceNode, sourceSpec), admitted, floors) ->
+            let operands =
+                pipeline
+                |> List.choose Reads.operandOf
+                |> List.choose (fun s ->
+                    match s with
+                    | Ref n -> Model.tryTable n model
+                    | Embedded _ -> None)
 
-                    match floor, first with
-                    | None, Some(step, c) -> Error(PolicyRefusal.FloorUndeclared(step, c))
-                    | None, None
-                    | Some _, _ -> Ok(admitted, floors))
-                |> Result.bind (fun (admitted, floors) ->
-                    bound subject sourceSpec sourceNode
-                    |> Result.bind (fun heads ->
-                        // the flow before each written step, for the post-join names
-                        let flows =
-                            pipeline |> List.scan (advance model) start |> List.take (List.length pipeline)
+            let tables =
+                ((sourceNode, sourceSpec) :: operands) |> List.distinctBy (fun (n, _) -> n.Id)
 
-                        List.zip flows (pipeline |> List.indexed |> List.map (fun (i, s) -> i + 1, s))
+            let start = tableFlow None sourceNode sourceSpec
+            let costVerdict, floor = cost model tables pipeline
+
+            let first =
+                floors
+                |> Map.toList
+                |> List.tryPick (fun (step, (_, _, needs)) ->
+                    needs |> List.collect snd |> List.tryHead |> Option.map (fun c -> step, c))
+
+            (match floor, first with
+             | None, Some(step, c) -> Error(PolicyRefusal.FloorUndeclared(step, c))
+             | None, None
+             | Some _, _ -> Ok(admitted, floors))
+            |> Result.bind (fun (admitted, floors) ->
+                bound subject sourceSpec sourceNode
+                |> Result.bind (fun heads ->
+                    // the flow before each written step, for the post-join names
+                    let flows =
+                        pipeline
+                        |> List.scan (advance None model) start
+                        |> List.take (List.length pipeline)
+
+                    List.zip flows (pipeline |> List.indexed |> List.map (fun (i, s) -> i + 1, s))
+                    |> List.fold
+                        (fun acc (flow, st) ->
+                            acc
+                            |> Result.bind (fun xs ->
+                                afterStep model subject flow st |> Result.map (fun a -> xs @ [ a ])))
+                        (Ok [])
+                    |> Result.map (fun after -> admitted, floors, heads, after)))
+            |> Result.bind (fun (admitted, floors, heads, after) ->
+                costVerdict
+                |> Result.map (fun (rows, joins, keys, limits) ->
+                    let headSteps = heads |> List.map (fun (_, p) -> Filter p)
+
+                    let headRules =
+                        heads
+                        |> List.mapi (fun i (p, pred) ->
+                            PolicyRule.RowPolicyApplied(sourceSpec.Name, p, i + 1, pred))
+
+                    let steps, rules =
+                        List.zip (pipeline |> List.indexed) after
                         |> List.fold
-                            (fun acc (flow, st) ->
-                                acc
-                                |> Result.bind (fun xs ->
-                                    afterStep model subject flow st |> Result.map (fun a -> xs @ [ a ])))
-                            (Ok [])
-                        |> Result.map (fun after -> admitted, floors, heads, after)))
-                |> Result.bind (fun (admitted, floors, heads, after) ->
-                    costVerdict
-                    |> Result.map (fun (rows, joins, keys, limits) ->
-                        let headSteps = heads |> List.map (fun (_, p) -> Filter p)
+                            (fun (steps: Transform list, rules: PolicyRule list) ((i, step), policies) ->
+                                let written, floorRules =
+                                    match Map.tryFind (i + 1) floors, limits.MinGroupSize with
+                                    | Some(keys, aggs, needs), Some f ->
+                                        floored f keys aggs needs,
+                                        [ PolicyRule.GroupFloorApplied(
+                                              i + 1,
+                                              f,
+                                              needs |> List.collect snd |> List.distinct
+                                          ) ]
+                                    | Some _, None
+                                    | None, _ -> [ step ], []
 
-                        let headRules =
-                            heads
-                            |> List.mapi (fun i (p, pred) ->
-                                PolicyRule.RowPolicyApplied(sourceSpec.Name, p, i + 1, pred))
+                                let steps = steps @ written
 
-                        let steps, rules =
-                            List.zip (pipeline |> List.indexed) after
-                            |> List.fold
-                                (fun (steps: Transform list, rules: PolicyRule list) ((i, step), policies) ->
-                                    let written, floorRules =
-                                        match Map.tryFind (i + 1) floors, limits.MinGroupSize with
-                                        | Some(keys, aggs, needs), Some f ->
-                                            floored f keys aggs needs,
-                                            [ PolicyRule.GroupFloorApplied(
-                                                  i + 1,
-                                                  f,
-                                                  needs |> List.collect snd |> List.distinct
-                                              ) ]
-                                        | Some _, None
-                                        | None, _ -> [ step ], []
+                                let policyRules =
+                                    policies
+                                    |> List.mapi (fun j (t, p, pred) ->
+                                        PolicyRule.RowPolicyApplied(t, p, List.length steps + j + 1, pred))
 
-                                    let steps = steps @ written
+                                steps @ (policies |> List.map (fun (_, _, pred) -> Filter pred)),
+                                rules @ floorRules @ policyRules)
+                            (headSteps, [])
 
-                                    let policyRules =
-                                        policies
-                                        |> List.mapi (fun j (t, p, pred) ->
-                                            PolicyRule.RowPolicyApplied(t, p, List.length steps + j + 1, pred))
-
-                                    steps @ (policies |> List.map (fun (_, _, pred) -> Filter pred)),
-                                    rules @ floorRules @ policyRules)
-                                (headSteps, [])
-
-                        { model = model
-                          source = source
-                          written = pipeline
-                          pipeline = steps
-                          applied =
-                            [ PolicyRule.ColumnsGranted admitted ]
-                            @ headRules
-                            @ rules
-                            @ [ PolicyRule.CostAdmitted(rows, joins, keys, limits) ]
-                          limits = limits
-                          principal = subject.Principal })))
+                    { model = model
+                      source = source
+                      written = pipeline
+                      pipeline = steps
+                      applied =
+                        [ PolicyRule.ColumnsGranted admitted ]
+                        @ headRules
+                        @ rules
+                        @ [ PolicyRule.CostAdmitted(rows, joins, keys, limits) ]
+                      limits = limits
+                      principal = subject.Principal })))

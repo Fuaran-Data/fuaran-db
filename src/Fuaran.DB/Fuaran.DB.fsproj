@@ -25,6 +25,7 @@
     <Compile Include="Policy.fs" />
     <Compile Include="Drift.fs" />
     <Compile Include="Wire.fs" />
+    <Compile Include="ModelProjection.fs" />
     <Compile Include="AiTools.fs" />
   </ItemGroup>
 
@@ -38,6 +39,7 @@
     <PackageReference Include="Fuaran.Core.Wire" Version="0.36.0" />
     <PackageReference Include="Fuaran.Core.Column" Version="0.36.0" />
     <PackageReference Include="Fuaran.Core.AiSurface" Version="0.36.0" />
+    <PackageReference Include="Fuaran.Core.Conformance" Version="0.36.0" />
     <PackageReference Include="Fuaran.Compute.DataFrame" Version="0.38.1" />
   </ItemGroup>
 

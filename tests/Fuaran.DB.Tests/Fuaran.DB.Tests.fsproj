@@ -22,6 +22,7 @@
     <Compile Include="ReferenceDialect.fs" />
     <Compile Include="ProviderTests.fs" />
     <Compile Include="PolicyTests.fs" />
+    <Compile Include="ProjectionTests.fs" />
     <Compile Include="FingerprintTests.fs" />
     <Compile Include="SubstraitSurveyTests.fs" />
     <Compile Include="SqlServerTests.fs" />

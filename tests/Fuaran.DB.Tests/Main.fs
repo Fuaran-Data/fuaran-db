@@ -80,6 +80,27 @@ let private writeFixtures () =
     File.WriteAllText(Path.Combine(dir, "session", "rejects.json"), "[\n" + rejects + "\n]\n", utf8)
     printfn "wrote session/rejects.json"
 
+    // the model projected per peer (Phase 1907): the worked model for three subjects, and the refusals
+    for name, text in ProjectionTests.corpusProjections () do
+        write "projections/accept" name text
+
+    let projectionRejects =
+        ProjectionTests.corpusRejects ()
+        |> List.map (fun (name, input, code) ->
+            "  "
+            + Canon.render (
+                JObj
+                    [ "name", JStr name
+                      "as", JStr "projection"
+                      "input", JStr input
+                      "code", JStr code ]
+            ))
+        |> String.concat ",\n"
+
+    File.WriteAllText(Path.Combine(dir, "projections", "rejects.json"), "[\n" + projectionRejects + "\n]\n", utf8)
+
+    printfn "wrote projections/rejects.json"
+
 [<EntryPoint>]
 let main argv =
     if Array.contains "--write-fixtures" argv then

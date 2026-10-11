@@ -1,5 +1,71 @@
 # Fuaran.DB — decisions (newest first)
 
+## 2026-10-12 — D10: the model projected per peer (Phase 1907)
+
+In the custodian topology the provider, the model and the policy run on the far side of a peer call. The
+requester still needs something to build a pipeline against, and may not be given the whole model, because
+what exists is itself information. `ModelProjection` answers the part one subject may read. Seven rulings,
+each with what would reopen it.
+
+1. **A projection is a model, and a function of the readable part alone.** `project model grants` keeps
+   the classifications the model declares and the grants reach; each table with a column of one of them,
+   holding just those columns; each source holding such a table; each relation whose tables and key
+   columns all survive (a relation that lost one key pair is dropped, never narrowed, since a join on fewer
+   keys is another relation); and each measure whose column survives. Ids and names are kept, because
+   relations and measures name columns by id and pipelines read names. The root keeps its id and name, so
+   the empty projection is `Model.empty` of the model the requester addressed. The output is an ordinary
+   model and passes every model rule. *Reopen* if the root's name is itself to be withheld.
+2. **What it never carries.** Physical identifiers become the model names (the field stays, so the model
+   codec carries a projection unchanged); row policies, limits, a source's fingerprint and the recording
+   rule are dropped; no classification outside the grants is declared. The shard reads that a projection
+   is "a function of the model's hash and the subject's grants": it is a function of the model and the
+   grants, deterministically, but it does **not** carry the model's hash, since two models that differ only
+   in what the subject cannot read must project to the same bytes, and a carried model hash would tell
+   them apart. *Reopen* never by addition: carrying more is a change to the posture (STABILITY.md).
+3. **The grants travel with it, normalised.** A projection carries one grant per declared classification,
+   at the highest level any of the subject's grants names, in the model's order. The requester needs the
+   level to foresee the aggregate-only rule, and the principal and attributes are not carried: two
+   subjects with the same grants share a projection. A decoded text that is not its own projection under
+   its own grants, or is not a well-formed model, is refused (`DB-WIRE-WRONG-SHAPE`); that one fixed-point
+   check covers every part a projection may not carry. *Reopen* if grants gain a third level.
+4. **The requester's check is the custodian's column authorisation, run over the projection with every
+   table taken to hold withheld columns.** `ModelProjection.admits` runs the same walk as
+   `Policy.columns` (`Policy.admit`'s first half, now public), with one difference: each table's rows carry
+   one more lineage, for the columns the projection may withhold, classified by a mark no grant names.
+   A use of every column of the rows (a result, a `Distinct`, a set operation) meets it and is refused as
+   `DB-PROJECTION-WITHHELD`; projecting the table to named columns drops it. The projection cannot say a
+   table hides nothing, since saying so would distinguish two models the subject may not tell apart, so this
+   is conservative by construction: the requester refuses some pipelines the custodian would admit, and the
+   laws show that it happens. Every other refusal is the policy's own code. *Reopen* if requesters need
+   whole-table reads, which would need the custodian to publish completeness as a deliberate disclosure.
+5. **A join's renaming is the subtle case.** The evaluator suffixes a right column whose name the left rows
+   hold, and withheld columns take part in that renaming. So under a projection, a right column's joined
+   name carries the withheld lineage when the left rows may hide a column (the name could be the left's),
+   and a `_right` name carries the right table's withheld lineage too (a withheld right column could hold
+   that name ahead of it). Reading such a name is refused; naming the left rows first, and reading names
+   that cannot collide, is admitted. Both rules were shown load-bearing by removing each and watching the
+   agreement law fail; the `_right` rule is reached rarely by the generator (in 4 of 61 seeds at 2000 cases
+   with it removed), so a worked test pins it as well. *Reopen* if the evaluator's renaming changes.
+6. **Drift is in the names a pipeline reads.** `drift pinned fresh` reports columns added, removed and
+   retyped per table (Core's `Schema.diff`; a rename is a removal and an addition, an order change is none),
+   relations and measures added and removed by name, ends or keys and aggregate, and grant levels changed.
+   A removal, a retype `ColumnType.widens` does not allow, and a lowered grant are breaking; additions and
+   widenings are not. The pin is the projection's hash, `sha256:` over its canonical text. *Reopen* if a
+   relation rename should be read as a rename rather than a removal and an addition.
+7. **The laws live with the code** (`ModelProjection.Laws`, which adds the released
+   `Fuaran.Core.Conformance` to `Fuaran.DB`, as the provider and session packages already reference it).
+   Over generated models, grants, twins and pipelines: total, pure, idempotent, monotone in the grants, a
+   well-formed model, never carrying a physical identifier, policy, limit, fingerprint, recording rule,
+   unreadable classification or unreadable table, the same bytes for a twin that differs only outside the
+   grants, a round-tripping wire, drift that is never breaking for more grants and breaking for fewer
+   exactly when they read less, and agreement: a pipeline the projection admits is one `Policy.columns`
+   admits for the same subject, with the same columns at the same levels. The converse is not claimed:
+   the custodian also applies cost, group-size and row-policy rules, and the projection's conservatism
+   refuses more. The adequacy guard demands six verdicts, from both admitting (with a join and with an
+   aggregate-only column) to each kind of refusal. A seventh, a policy refusal the custodian would not make,
+   was never reached in 122,000 cases (61 seeds of 2,000) and is not demanded. The peer contract and the projection's
+   transport are out of scope here; this ships what the contract would carry.
+
 ## 2026-10-11 — D9: the connection record (Phase 1903)
 
 A new package, `Fuaran.DB.Session`: what passed over a connection, recorded as a hash-chained op-stream on
