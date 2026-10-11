@@ -16,15 +16,18 @@ public feed, names one contract and is never repacked: a change after that point
 - **The public F# surface of `Fuaran.DB`**: the node kinds and their specs, `ModelState`, `ModelOp`,
   `ModelRejection`, `PipelineRefusal`, `WireError`, `TableDrift`, the reported-schema records, the
   policy's `GrantLevel`, `Grant`, `Subject`, `ColumnRef`, `PolicySite`, `CostLimits`, `PolicyRefusal`,
-  `PolicyRule` and `Admitted`, and the functions of `ModelNode`, `LimitSpec`, `Model`, `ModelOps`,
-  `Reads`, `ModelRules`, `PipelineCheck`, `Policy`, `Drift`, `ModelWire` and `AiTools`.
+  `PolicyRule` and `Admitted`, the fingerprint's `FingerprintMethod`, `FingerprintKind`,
+  `FingerprintDisclosure`, `TableReading`, `FileReading`, `FingerprintReading` and `FingerprintVerdict`,
+  and the functions of `ModelNode`, `LimitSpec`, `Model`, `ModelOps`, `Reads`, `ModelRules`,
+  `PipelineCheck`, `Policy`, `Fingerprint`, `Drift`, `ModelWire` and `AiTools`.
 - **The public F# surface of `Fuaran.DB.Provider`**: `Construct`, `Scalar`, `Output`, `Pick`,
   `Relation`, `Parameter`, `Statement`, `Dialect`, `Refusal`, `Bindings`, `SplitReport`, `Lowered`,
-  `PlacementCase`, and the functions of `Relation`, `Statement`, `Render`, `Refusal`, `Bindings`,
-  `FoldSplit` and `PlacementLaws`. Every package in the repository is cut at the one version.
+  `PlacementCase`, `TableProbe`, `Probe`, `ProbeRefusal`, and the functions of `Relation`, `Statement`,
+  `Render`, `Refusal`, `Bindings`, `FoldSplit`, `PlacementLaws` and `Probe`. Every package in the repository is cut at the one version.
 - **The closed unions are closed on purpose.** A case added to `NodeKind`, `ModelOp`,
   `ModelRejection`, `PipelineRefusal`, `WireError`, `TableDrift`, `GrantLevel`, `PolicySite`,
-  `PolicyRefusal`, `PolicyRule`, `Construct`, `Scalar`, `Relation`, `Pick` or `Refusal` breaks every exhaustive match a consumer has written, so it is a breaking change,
+  `PolicyRefusal`, `PolicyRule`, `FingerprintMethod`, `FingerprintKind`, `FingerprintReading`,
+  `FingerprintVerdict`, `Construct`, `Scalar`, `Relation`, `Pick`, `Refusal`, `Probe` or `ProbeRefusal` breaks every exhaustive match a consumer has written, so it is a breaking change,
   never an additive one, whatever it looks like. A function added to the `Dialect` record breaks every
   dialect, for the same reason.
 - **A field added to a record** breaks every full-literal construction of it, and is breaking too.
@@ -32,7 +35,8 @@ public feed, names one contract and is never repacked: a change after that point
   names, and canonical rendering. The corpus in `wire-fixtures/` is its executable statement; a change
   that moves a vector's bytes is a new wire version.
 - **The codes**: every `DB-*` rule code in `ModelRules.codes`, every policy refusal code in
-  `Policy.codes`, every `DB-WIRE-*` code from `ModelWire.code`, and the AI surface's tool names and op kinds. A host matches on these; renaming one
+  `Policy.codes`, every `DB-WIRE-*` code from `ModelWire.code`, every `DB-PROBE-*` code from `Probe.code`,
+  and the AI surface's tool names and op kinds. A host matches on these; renaming one
   is breaking.
 - **What the check admits.** Making `PipelineCheck.check` or the model rules refuse something they
   admitted is breaking for a consumer whose pipelines passed; admitting something they refused is a
@@ -42,6 +46,9 @@ public feed, names one contract and is never repacked: a change after that point
 - **Only an admitted pipeline lowers.** `FoldSplit.lower` and `FoldSplit.explain` take the policy's
   `Admitted`, which `Policy.admit` alone constructs. Adding a public entry point that lowers a pipeline
   the policy has not admitted is a change to the posture, never an addition.
+- **What a fingerprint discloses.** A method's kind and its disclosed misses are a contract a host trusts
+  a schedule to: calling a method exact that was heuristic, or dropping a disclosed miss, is a change to the
+  posture and needs a decision first. Adding a disclosed miss or over-report is a correction and rides.
 - **What lowers, and the text it lowers to.** The declared subset (DECISIONS.md D4.4) and the shape of
   the statement's form are a contract: lowering less moves work from the database to the host, and
   lowering more is a claim of parity the placement laws must hold and a decision records first. A change
@@ -80,3 +87,22 @@ the version on a released slot.
   decoder older than this draft refuses a limit that declares any of them, by name.
 - **The posture, tightened**: `DB-LIMIT-NONPOSITIVE` now also reports a negative join or grouping cap
   and a group floor or timeout below one.
+
+Riding the draft (Phase 2008), on the same terms: the source fingerprint. Two changes are BREAKING in
+shape and recorded as such.
+
+- **Breaking — `SourceSpec` gains `Fingerprint: FingerprintMethod option`.** A full-literal construction
+  stops compiling; `Fingerprint = None` is the source that declares none, as every source did before.
+- **Breaking — the `Dialect` record gains `ChangeCounter: string option`**, the statement reading the
+  engine's own change counter, or `None`. Every dialect value must name it.
+- **Additive — the fingerprint**: `FingerprintMethod` and the reading and verdict types above, the
+  `Fingerprint` module (`disclose`, `kind`, `trySource`, `ofSource`, `compare`), the provider's `Probe`
+  module (`forSource`, `advise`, `readTables`, `code`) with `TableProbe`, `Probe` and `ProbeRefusal`, and
+  the AI surface's `sources` read tool.
+- **Additive — the wire**: a `source` node may carry `fingerprint`, a typed object (`changeCounter`,
+  `rowCountMaxChange` with its `tables` pairs, or `fileStat` with `contentHash`), written only when
+  declared. A source declaring none renders to the bytes it rendered before, so every existing vector is
+  unchanged; `ops/07-amend.json` is the new one. The kind is never on the wire: it follows from the method.
+- **The posture, tightened**: four new rule codes, `DB-FINGERPRINT-DANGLING`, `-FOREIGN`, `-TYPE` and
+  `-COVERAGE`, refuse a row-count fingerprint that names what the model does not hold, reaches outside its
+  source, reads a change column of a type that does not advance, or leaves a table out.

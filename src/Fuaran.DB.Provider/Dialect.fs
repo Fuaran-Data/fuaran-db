@@ -34,6 +34,10 @@ type Dialect =
         /// emits each one; a refusal places the fold boundary at that step, and the step runs in the
         /// reference evaluator instead.
         Refuses: Construct -> string option
+        /// The statement that reads the source's own change counter or log position as one row of
+        /// one column, or `None` where the engine keeps none. A source fingerprinted by
+        /// `ChangeCounter` is probed through it (`Probe`, DECISIONS.md D6).
+        ChangeCounter: string option
     }
 
 /// Rendering a statement's abstract form through a dialect: nested selects, one per relation.

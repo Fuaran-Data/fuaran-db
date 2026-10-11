@@ -83,7 +83,7 @@ let private modelWith (limits: LimitSpec list) : ModelNode =
               Classifications = [ "public"; "internal"; "personal" ] }
       Children =
         [ { Id = "s:hr"
-            Kind = NodeKind.Source { Name = "hr" }
+            Kind = NodeKind.Source { Name = "hr"; Fingerprint = None }
             Children = [ staff; depts; projects ] }
           relation "j:staff-depts" "depts"
           relation "j:staff-projects" "projects" ]

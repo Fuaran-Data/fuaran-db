@@ -82,10 +82,28 @@ let genTree (rng: Rng.T) : ModelNode * Rng.T =
 
     let source () =
         let id = fresh ()
+        let tables = [ for _ in 1 .. below 3 -> table () ]
+
+        // each fingerprint method, or none, so the wire's round trip is exercised with every shape
+        let fingerprint =
+            match below 4 with
+            | 0 -> None
+            | 1 -> Some FingerprintMethod.ChangeCounter
+            | 2 -> Some(FingerprintMethod.FileStat(below 2 = 0))
+            | _ ->
+                Some(
+                    FingerprintMethod.RowCountMaxChange(
+                        tables
+                        |> List.choose (fun t -> t.Children |> List.tryHead |> Option.map (fun c -> t.Id, c.Id))
+                    )
+                )
 
         { Id = id
-          Kind = NodeKind.Source { Name = "source_" + id }
-          Children = [ for _ in 1 .. below 3 -> table () ] }
+          Kind =
+            NodeKind.Source
+                { Name = "source_" + id
+                  Fingerprint = fingerprint }
+          Children = tables }
 
     let root =
         { Id = "root"
@@ -151,7 +169,7 @@ let genOp (rng: Rng.T) : ModelOp * Rng.T =
                 | NodeKind.Column c -> NodeKind.Column { c with Name = c.Name + "_renamed" }
                 | NodeKind.Limit l -> NodeKind.Limit { l with MaxRows = l.MaxRows + v }
                 | other -> other
-            | None -> NodeKind.Source { Name = "s" }
+            | None -> NodeKind.Source { Name = "s"; Fingerprint = None }
 
         ModelOp.Amend(at, kind), r
     | _ -> ModelOp.Retire at, r

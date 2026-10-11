@@ -26,7 +26,9 @@ Pre-release. `Fuaran.DB` holds the dataset model: its node kinds and op vocabula
 check of a pipeline against a model, seeding and drift against a reported schema, a canonical wire codec with
 its conformance corpus in [`wire-fixtures/`](wire-fixtures/), and an AI-tools surface. It also holds the
 policy: for a subject the host supplies, column grants, row policies, cost limits and a minimum group size
-decide on the tree whether a pipeline is admitted, refusing by name or rewriting visibly.
+decide on the tree whether a pipeline is admitted, refusing by name or rewriting visibly. A source may declare
+a fingerprint a host polls to learn that it moved without reading it, each method disclosing whether it is
+exact or heuristic and what it can miss; the provider writes each dialect's probe for it.
 `Fuaran.DB.Provider` lowers an admitted pipeline, and nothing else: the dialect seam, the fold split that
 lowers the longest reducing prefix to one parameterised statement and runs the rest locally, the named
 refusals that set where the split falls, and the placement laws a dialect is certified against. No dialect ships yet.

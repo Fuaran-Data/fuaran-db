@@ -30,11 +30,28 @@ type ModelSpec =
         Classifications: string list
     }
 
+/// How a host can learn that a source moved without reading it (Phase 2008, DECISIONS.md D6). The
+/// model declares the METHOD; whether it is exact or heuristic, and what it can miss, follow from the
+/// method (`Fingerprint.disclose`) and are never asserted by an author.
+[<RequireQualifiedAccess>]
+type FingerprintMethod =
+    /// The source's own change counter or log position, read through its dialect. Exact.
+    | ChangeCounter
+    /// Per table, by id, its row count and the maximum of the change column the model names, by
+    /// column id. Every table of the source is named exactly once. Heuristic.
+    | RowCountMaxChange of tables: (string * string) list
+    /// A file's size and modification time, and its content hash when `contentHash` is set. Exact
+    /// with the hash, heuristic without it.
+    | FileStat of contentHash: bool
+
 /// A named source — one database, or one schema of one — holding tables.
 type SourceSpec =
     {
         /// The source's name.
         Name: string
+        /// How the source is fingerprinted, or `None` when it declares no fingerprint: a host then
+        /// has no cheap way to learn that it moved, and must read it or work to a schedule.
+        Fingerprint: FingerprintMethod option
     }
 
 /// A table: the name a pipeline reads it by, and the physical identifier the source knows it by.

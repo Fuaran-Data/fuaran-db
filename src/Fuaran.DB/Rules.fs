@@ -53,6 +53,24 @@ module ModelRules =
     [<Literal>]
     let RootNotModel = "DB-ROOT-NOT-MODEL"
 
+    /// A source's fingerprint names a table or column the model does not hold.
+    [<Literal>]
+    let FingerprintDangling = "DB-FINGERPRINT-DANGLING"
+
+    /// A source's fingerprint names a table of another source, or a change column of another table.
+    [<Literal>]
+    let FingerprintForeign = "DB-FINGERPRINT-FOREIGN"
+
+    /// A fingerprint's change column is not a timestamp, date or int column, so its maximum does
+    /// not advance with a change.
+    [<Literal>]
+    let FingerprintType = "DB-FINGERPRINT-TYPE"
+
+    /// A row-count fingerprint leaves a table of its source out, or names one more than once. A
+    /// change to a table it leaves out would never move it.
+    [<Literal>]
+    let FingerprintCoverage = "DB-FINGERPRINT-COVERAGE"
+
     /// Every code a model rule can report.
     let codes =
         [ JoinDangling
@@ -65,7 +83,11 @@ module ModelRules =
           ClassificationUndeclared
           LimitNonPositive
           NameDuplicate
-          RootNotModel ]
+          RootNotModel
+          FingerprintDangling
+          FingerprintForeign
+          FingerprintType
+          FingerprintCoverage ]
 
     let private defect code (message: string) (node: string) related : Defect<string> =
         { Defect.create code Severity.Error message (Some node) with
@@ -291,6 +313,131 @@ module ModelRules =
 
         rootDefects @ perNode @ tableNames
 
+    /// A change column's maximum advances with a change only on an ordered type that a writer
+    /// stamps: a timestamp, a date or an int version.
+    let private isChangeType (t: ColumnType) : bool =
+        match t with
+        | TimestampType
+        | DateType
+        | IntType -> true
+        | FloatType
+        | DecimalType
+        | BoolType
+        | StringType -> false
+
+    let private isTable (n: ModelNode) : bool =
+        match n.Kind with
+        | NodeKind.Table _ -> true
+        | NodeKind.Model _
+        | NodeKind.Source _
+        | NodeKind.Column _
+        | NodeKind.Join _
+        | NodeKind.Measure _
+        | NodeKind.RowPolicy _
+        | NodeKind.Limit _ -> false
+
+    /// One `(table id, change column id)` pair of a row-count fingerprint, held to the source.
+    let private pairDefects
+        (root: ModelNode)
+        (src: ModelNode)
+        (name: string)
+        (own: ModelNode list)
+        (tid: string, cid: string)
+        : Defect<string> list =
+        match own |> List.tryFind (fun t -> t.Id = tid) with
+        | None ->
+            match ModelNode.tryFind tid root with
+            | None ->
+                [ defect
+                      FingerprintDangling
+                      (sprintf "source '%s' fingerprints table '%s', which the model does not hold" name tid)
+                      src.Id
+                      [] ]
+            | Some _ ->
+                [ defect
+                      FingerprintForeign
+                      (sprintf "source '%s' fingerprints '%s', which is not one of its tables" name tid)
+                      src.Id
+                      [ tid ] ]
+        | Some t ->
+            match Model.columns t |> List.tryFind (fun (c, _) -> c.Id = cid) with
+            | Some(_, c) when isChangeType c.Type -> []
+            | Some(_, c) ->
+                [ defect
+                      FingerprintType
+                      (sprintf
+                          "source '%s' reads change column '%s', a %s column; it needs timestamp, date or int"
+                          name
+                          c.Name
+                          (ColumnType.tag c.Type))
+                      src.Id
+                      [ cid ] ]
+            | None ->
+                match ModelNode.tryFind cid root with
+                | None ->
+                    [ defect
+                          FingerprintDangling
+                          (sprintf "source '%s' reads change column '%s', which the model does not hold" name cid)
+                          src.Id
+                          [ tid ] ]
+                | Some _ ->
+                    [ defect
+                          FingerprintForeign
+                          (sprintf
+                              "source '%s' reads change column '%s', which is not a column of table '%s'"
+                              name
+                              cid
+                              tid)
+                          src.Id
+                          [ tid; cid ] ]
+
+    let private sourceRules (root: ModelNode) : Defect<string> list =
+        ModelNode.preorder root
+        |> List.collect (fun src ->
+            match src.Kind with
+            | NodeKind.Source { Name = name
+                                Fingerprint = Some(FingerprintMethod.RowCountMaxChange pairs) } ->
+                let own = src.Children |> List.filter isTable
+                let counts = pairs |> List.countBy fst |> Map.ofList
+
+                let coverage =
+                    own
+                    |> List.choose (fun t ->
+                        match Map.tryFind t.Id counts with
+                        | None ->
+                            Some(
+                                defect
+                                    FingerprintCoverage
+                                    (sprintf
+                                        "source '%s' fingerprints by row count but not table '%s'; a change to it would never move the fingerprint"
+                                        name
+                                        (ModelNode.name t))
+                                    src.Id
+                                    [ t.Id ]
+                            )
+                        | Some 1 -> None
+                        | Some _ ->
+                            Some(
+                                defect
+                                    FingerprintCoverage
+                                    (sprintf
+                                        "source '%s' fingerprints table '%s' more than once"
+                                        name
+                                        (ModelNode.name t))
+                                    src.Id
+                                    [ t.Id ]
+                            ))
+
+                (pairs |> List.collect (pairDefects root src name own)) @ coverage
+            | NodeKind.Source _
+            | NodeKind.Model _
+            | NodeKind.Table _
+            | NodeKind.Column _
+            | NodeKind.Join _
+            | NodeKind.Measure _
+            | NodeKind.RowPolicy _
+            | NodeKind.Limit _ -> [])
+
     let private family (id: string) (run: ModelNode -> Defect<string> list) : RuleFamily<ModelNode, string> =
         { Id = id
           Run = fun _ root -> run root }
@@ -302,7 +449,8 @@ module ModelRules =
               family "model" modelRules
               family "tables" tableRules
               family "joins" joinRules
-              family "measures" measureRules ] }
+              family "measures" measureRules
+              family "sources" sourceRules ] }
 
     /// Every defect the registry finds in a model.
     let check (root: ModelNode) : Defect<string> list =

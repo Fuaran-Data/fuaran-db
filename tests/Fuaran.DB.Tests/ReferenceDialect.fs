@@ -74,7 +74,9 @@ let dialect: Dialect =
             | Construct.Operator StartsWith
             | Construct.Operator EndsWith ->
                 Some "an engine's pattern matching folds case and reads wildcards (recipe 07)"
-            | _ -> None }
+            | _ -> None
+      // The reference engine keeps no change counter; a source over it is fingerprinted by row count.
+      ChangeCounter = None }
 
 // ---- the interpreter ----
 

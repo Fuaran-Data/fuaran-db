@@ -79,7 +79,7 @@ module Drift =
                   Classifications = [ classification ] }
           Children =
             [ { Id = "s:" + source
-                Kind = NodeKind.Source { Name = source }
+                Kind = NodeKind.Source { Name = source; Fingerprint = None }
                 Children = tables } ] }
 
     /// Hold one source of `model` against what that source reported. Per table, the verdict is

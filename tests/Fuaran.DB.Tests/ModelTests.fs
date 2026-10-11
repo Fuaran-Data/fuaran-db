@@ -43,7 +43,9 @@ let tests =
 
           testCase "an amend may not change a node's kind"
           <| fun _ ->
-              ModelOps.apply (ModelOp.Amend("c:orders.revenue", NodeKind.Source { Name = "x" })) state
+              ModelOps.apply
+                  (ModelOp.Amend("c:orders.revenue", NodeKind.Source { Name = "x"; Fingerprint = None }))
+                  state
               |> expectRejection (ModelRejection.KindChange("c:orders.revenue", "column", "source"))
 
           testCase "retire removes the subtree, and its ids are never reused"

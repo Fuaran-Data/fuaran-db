@@ -65,7 +65,7 @@ let model: ModelNode =
               Classifications = [ "public"; "personal" ] }
       Children =
         [ { Id = "s:sales"
-            Kind = NodeKind.Source { Name = "sales" }
+            Kind = NodeKind.Source { Name = "sales"; Fingerprint = None }
             Children = [ orders; lines; customers ] }
           leaf
               "j:orders-lines"

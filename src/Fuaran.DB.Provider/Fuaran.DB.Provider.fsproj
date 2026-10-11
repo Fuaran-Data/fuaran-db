@@ -29,6 +29,7 @@
     <Compile Include="Lowering.fs" />
     <Compile Include="FoldSplit.fs" />
     <Compile Include="PlacementLaws.fs" />
+    <Compile Include="Probe.fs" />
   </ItemGroup>
 
   <ItemGroup>

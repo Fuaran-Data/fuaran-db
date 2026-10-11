@@ -76,7 +76,10 @@ module PlacementLaws =
                   Classifications = [ "public" ] }
           Children =
             [ { Id = "src"
-                Kind = NodeKind.Source { Name = "warehouse" }
+                Kind =
+                  NodeKind.Source
+                      { Name = "warehouse"
+                        Fingerprint = None }
                 Children =
                   [ table
                         "t:f"

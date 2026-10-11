@@ -1,5 +1,69 @@
 # Fuaran.DB — decisions (newest first)
 
+## 2026-10-11 — D6: a cheap source fingerprint (Phase 2008)
+
+A host that re-runs work when a source changes needs to learn that it changed without reading it. A source
+may declare a fingerprint the host polls; each method states how far it can be trusted. Seven rulings, each
+with what would reopen it.
+
+1. **The model declares the method. The kind and the blind spots are derived from it.**
+   `SourceSpec.Fingerprint` is a `FingerprintMethod option`: `ChangeCounter`, `RowCountMaxChange` (per table,
+   the change column the model names) or `FileStat` (with or without a content hash). `Fingerprint.disclose`
+   derives the kind (`Exact` or `Heuristic`), the changes it can miss, and the moves it can make when nothing
+   changed. An author never asserts a kind, and the wire carries none (a `fingerprint` object with an `exact`
+   field is refused as an unknown field), so no model can call a heuristic exact. A source with `None`
+   declares no fingerprint. Its host must read it or work to a schedule, and the probe says so by name
+   (`DB-PROBE-UNFINGERPRINTED`). *Reopen if* a method's guarantee depends on deployment facts the method
+   cannot name, such as a counter scoped to one schema on one engine and to a whole server on another. Its
+   disclosure would then have to be the dialect's to state.
+2. **Exact means no missed change. Over-reporting is disclosed and allowed.** A change counter moves on a
+   write that leaves the data as it was, and on writes outside the source when its scope is wider. Both cost
+   a re-run and never a wrong result, so the counter is `Exact` with those over-reports disclosed. A content
+   hash is exact with nothing over-reported: an unmoved hash is `Unchanged` even when the modification time
+   moved. The verdicts are not symmetric. `Unchanged` is only answered under an exact method. A heuristic's
+   unmoved reading is `NoChangeSeen`, carrying its misses, so a host cannot read a heuristic silence as an
+   exact one. *Reopen if* a counter is found that can stand still across a change inside one history; that
+   would make it heuristic.
+3. **What each heuristic misses is documented and demonstrated.** Row count plus maximum change value misses
+   four things: an update that does not advance the change column; a delete paired with an insert whose
+   value does not exceed the old maximum; a change within the column's resolution (Core's timestamps keep
+   whole seconds); and a writer whose clock is behind. A file's size and modification time without the hash
+   miss a same-size rewrite within the time resolution, or one whose writer restores the time. The suite
+   shows the first three row-count misses and the file miss as real data changes the readings cannot see.
+   The clock-skew case is the same shape as the second, so it has no test of its own. *Reopen if* a new
+   miss is found: it is added to the disclosure, which STABILITY.md classes as a correction that rides.
+4. **A row-count fingerprint covers every table of its source, once.** Four rule codes:
+   `DB-FINGERPRINT-COVERAGE` for a table left out or named twice, because a change to a table left out would
+   never move the fingerprint. `DB-FINGERPRINT-DANGLING` for a table or column the model does not hold.
+   `DB-FINGERPRINT-FOREIGN` for another source's table or another table's column. `DB-FINGERPRINT-TYPE` for
+   a change column that is not timestamp, date or int, the ordered types a writer stamps. A float, decimal,
+   string or boolean maximum does not advance with a change in any useful sense. *Reopen if* a source wants
+   to fingerprint some of its tables and leave the rest to a schedule; that would need a per-table
+   declaration rather than a gap.
+5. **Per dialect: the counter where the engine keeps one, row counts where it does not, file metadata for a
+   file.** The dialect seam gains `ChangeCounter: string option`, the statement that reads the engine's own
+   change counter or log position. The provider's `Probe.forSource` writes the probe from the model's method
+   and the dialect: the counter text; one `SELECT COUNT(*), MAX(<change column>) FROM <table>` per table,
+   rendered through the dialect's own quoting and aggregates and refused by name where the dialect refuses
+   either aggregate; or a file probe that needs no statement. A counter declared over a dialect without one
+   is refused (`DB-PROBE-NO-CHANGE-COUNTER`) rather than silently degraded to a heuristic. `Probe.advise`
+   names the counter where the dialect keeps one and the model declares row counts or nothing, because it is
+   one statement and exact. It is advice only, and the model's declaration is what probes. The count is
+   `COUNT(*)`, not a count of the change column, so a row inserted with a null change value still moves it.
+   *Reopen if* a dialect's counter needs parameters, or more than one value, to be read.
+6. **The host reads; the domain compares.** As with drift (D2), nothing here opens a connection or a file.
+   The host runs the probe, and `Probe.readTables` turns its rows into a reading, refusing a count that is
+   not a non-negative integer and a maximum of the wrong type. For a file the host reads the size, the
+   modification time in UTC ticks and, where the method asks, `sha256:` and 64 lowercase hex over the
+   content. `Fingerprint.compare` is total and pure. A reading of the wrong shape, readings over different
+   tables, or a hash the method needs and a reading lacks answer `Incomparable`, which a host treats as
+   changed. A maximum is compared by Core's canonical cell token, so `1.50` and `1.5` are one value.
+7. **The fingerprint is recorded in the connection record by Phase 1903, not here.** The connection record
+   (`Fuaran.DB.Session`) does not exist yet, and its phase already lists the source's fingerprint among its
+   ops. This phase supplies what 1903 records: the method, `Fingerprint.disclose`'s kind, and the
+   `FingerprintReading` taken before each statement it guarded, with `Fingerprint.compare`'s verdict against
+   the previous reading.
+
 ## 2026-10-11 — D5: policy before lowering (Phase 1902)
 
 What a subject may read is decided on the tree, before any statement exists, by REFUSAL (the pipeline is not

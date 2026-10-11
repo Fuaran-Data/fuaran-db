@@ -1,0 +1,1 @@
+{"$type":"amend","id":"s:sales","kind":{"$type":"source","fingerprint":{"$type":"rowCountMaxChange","tables":[{"column":"c:orders.order_date","table":"t:orders"}]},"name":"sales"}}

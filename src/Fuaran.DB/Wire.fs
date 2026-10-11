@@ -81,11 +81,27 @@ module ModelWire =
 
     let private strs (xs: string list) = JArr(xs |> List.map JStr)
 
+    /// A fingerprint method as a typed object.
+    let private fingerprintJson (m: FingerprintMethod) : JVal =
+        match m with
+        | FingerprintMethod.ChangeCounter -> Canon.typed "changeCounter" []
+        | FingerprintMethod.RowCountMaxChange pairs ->
+            Canon.typed
+                "rowCountMaxChange"
+                [ "tables", JArr(pairs |> List.map (fun (t, c) -> JObj [ "table", JStr t; "column", JStr c ])) ]
+        | FingerprintMethod.FileStat hash -> Canon.typed "fileStat" [ "contentHash", JBool hash ]
+
     /// A kind's tag and its payload fields.
     let private kindFields (k: NodeKind) : (string * JVal) list =
         match k with
         | NodeKind.Model s -> [ "name", JStr s.Name; "classifications", strs s.Classifications ]
-        | NodeKind.Source s -> [ "name", JStr s.Name ]
+        | NodeKind.Source s ->
+            // The fingerprint is written only when declared, so a source that declares none renders
+            // to the bytes it rendered before the field existed (DECISIONS.md D6).
+            [ "name", JStr s.Name ]
+            @ (s.Fingerprint
+               |> Option.map (fun m -> "fingerprint", fingerprintJson m)
+               |> Option.toList)
         | NodeKind.Table s -> [ "name", JStr s.Name; "physical", JStr s.Physical ]
         | NodeKind.Column s ->
             [ "name", JStr s.Name
@@ -228,7 +244,7 @@ module ModelWire =
     let private payloadFields (tag: string) : string list =
         match tag with
         | "model" -> [ "name"; "classifications" ]
-        | "source" -> [ "name" ]
+        | "source" -> [ "name"; "fingerprint" ]
         | "table" -> [ "name"; "physical" ]
         | "column" -> [ "name"; "physical"; "type"; "classification" ]
         | "join" -> [ "name"; "left"; "right"; "on" ]
@@ -252,6 +268,47 @@ module ModelWire =
             return l, r
         }
 
+    let private tablePairOf (path: string) (v: JVal) : Result<string * string, WireError> =
+        result {
+            let! fs = fieldsOf path v
+            do! only path [ "table"; "column" ] fs
+            let! t = str path "table" fs
+            let! c = str path "column" fs
+            return t, c
+        }
+
+    let private fingerprintOf (path: string) (v: JVal) : Result<FingerprintMethod, WireError> =
+        result {
+            let! fs = fieldsOf path v
+            let! tag = str path "$type" fs
+
+            match tag with
+            | "changeCounter" ->
+                do! only path [ "$type" ] fs
+                return FingerprintMethod.ChangeCounter
+            | "rowCountMaxChange" ->
+                do! only path [ "$type"; "tables" ] fs
+                let! tables = arr path "tables" fs
+                let! pairs = tables |> traverse (fun i t -> tablePairOf (sprintf "%s.tables[%d]" path i) t)
+                return FingerprintMethod.RowCountMaxChange pairs
+            | "fileStat" ->
+                do! only path [ "$type"; "contentHash" ] fs
+                let! hash = field path "contentHash" fs
+
+                match hash with
+                | JBool b -> return FingerprintMethod.FileStat b
+                | _ -> return! Error(WireError.WrongShape(path + ".contentHash", "a boolean"))
+            | other ->
+                return!
+                    Error(
+                        WireError.UnknownKind(
+                            path + ".$type",
+                            other,
+                            [ "changeCounter"; "rowCountMaxChange"; "fileStat" ]
+                        )
+                    )
+        }
+
     let private kindOf (path: string) (tag: string) fs : Result<NodeKind, WireError> =
         match tag with
         | "model" ->
@@ -260,7 +317,20 @@ module ModelWire =
                 let! cls = strList path "classifications" fs
                 return NodeKind.Model { Name = name; Classifications = cls }
             }
-        | "source" -> str path "name" fs |> Result.map (fun name -> NodeKind.Source { Name = name })
+        | "source" ->
+            result {
+                let! name = str path "name" fs
+
+                let! fingerprint =
+                    match fs |> List.tryFind (fun (k, _) -> k = "fingerprint") with
+                    | None -> Ok None
+                    | Some(_, v) -> fingerprintOf (path + ".fingerprint") v |> Result.map Some
+
+                return
+                    NodeKind.Source
+                        { Name = name
+                          Fingerprint = fingerprint }
+            }
         | "table" ->
             result {
                 let! name = str path "name" fs

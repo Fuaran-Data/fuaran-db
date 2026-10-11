@@ -70,6 +70,44 @@ module AiTools =
                   "on", JArr(j.On |> List.map (fun (l, r) -> JStr(columnName l + " = " + columnName r))) ])
         |> JArr
 
+    let private sourcesOf (root: ModelNode) : JVal =
+        ModelNode.preorder root
+        |> List.choose (fun n ->
+            match n.Kind with
+            | NodeKind.Source s ->
+                let fingerprint =
+                    match s.Fingerprint with
+                    | None -> [ "fingerprint", JStr "none" ]
+                    | Some m ->
+                        let d = Fingerprint.disclose m
+
+                        let tag =
+                            match m with
+                            | FingerprintMethod.ChangeCounter -> "changeCounter"
+                            | FingerprintMethod.RowCountMaxChange _ -> "rowCountMaxChange"
+                            | FingerprintMethod.FileStat true -> "fileStat+contentHash"
+                            | FingerprintMethod.FileStat false -> "fileStat"
+
+                        let kind =
+                            match d.Kind with
+                            | FingerprintKind.Exact -> "exact"
+                            | FingerprintKind.Heuristic -> "heuristic"
+
+                        [ "fingerprint", JStr tag
+                          "kind", JStr kind
+                          "misses", JArr(d.Misses |> List.map JStr)
+                          "overReports", JArr(d.OverReports |> List.map JStr) ]
+
+                Some(JObj([ "id", JStr n.Id; "name", JStr s.Name ] @ fingerprint))
+            | NodeKind.Model _
+            | NodeKind.Table _
+            | NodeKind.Column _
+            | NodeKind.Join _
+            | NodeKind.Measure _
+            | NodeKind.RowPolicy _
+            | NodeKind.Limit _ -> None)
+        |> JArr
+
     let private defectsOf (root: ModelNode) : JVal =
         ModelRules.check root
         |> List.map (fun d ->
@@ -90,6 +128,10 @@ module AiTools =
           { Name = "relations"
             Description = "The joins the model permits, by table and column name."
             Run = fun s -> relationsOf s.Root }
+          { Name = "sources"
+            Description =
+              "Every source with its fingerprint: the method, whether it is exact or heuristic, what it can miss and what it can over-report."
+            Run = fun s -> sourcesOf s.Root }
           { Name = "defects"
             Description = "Every defect the model rules find, with its code and node."
             Run = fun s -> defectsOf s.Root } ]

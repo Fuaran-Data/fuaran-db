@@ -34,6 +34,13 @@ let sampleOps: ModelOp list =
                 MaxGroupKeys = Some 0
                 MinGroupSize = Some 5
                 TimeoutSeconds = Some 30 }
+      )
+      // then a source declaring a row-count fingerprint (Phase 2008), written only when declared
+      ModelOp.Amend(
+          "s:sales",
+          NodeKind.Source
+              { Name = "sales"
+                Fingerprint = Some(FingerprintMethod.RowCountMaxChange [ "t:orders", "c:orders.order_date" ]) }
       ) ]
 
 [<Tests>]
