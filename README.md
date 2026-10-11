@@ -24,9 +24,12 @@ No package here opens a connection: the host supplies the executor.
 
 Pre-release. `Fuaran.DB` holds the dataset model: its node kinds and op vocabulary, the model rules, the
 check of a pipeline against a model, seeding and drift against a reported schema, a canonical wire codec with
-its conformance corpus in [`wire-fixtures/`](wire-fixtures/), and an AI-tools surface. The provider that
-lowers a pipeline is not here yet. [`DECISIONS.md`](DECISIONS.md) records the decisions taken so far, and
-[`STABILITY.md`](STABILITY.md) what is a contract.
+its conformance corpus in [`wire-fixtures/`](wire-fixtures/), and an AI-tools surface.
+`Fuaran.DB.Provider` lowers a pipeline: the dialect seam, the fold split that lowers the longest reducing
+prefix to one parameterised statement and runs the rest locally, the named refusals that set where the split
+falls, and the placement laws a dialect is certified against. No dialect ships yet.
+[`DECISIONS.md`](DECISIONS.md) records the decisions taken so far, and [`STABILITY.md`](STABILITY.md) what
+is a contract.
 
 ## Building
 
