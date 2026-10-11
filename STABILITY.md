@@ -1,7 +1,7 @@
 # Fuaran.DB — API stability
 
 **Status:** pre-release. The package version is single-sourced from `<Version>` in
-`src/Fuaran.DB/Fuaran.DB.fsproj`; this document does not restate the number. Nothing has been packed
+`Directory.Build.props` (which `pack.ps1` reads); this document does not restate the number. Nothing has been packed
 for release or tagged, so the standing version is a **draft slot**: an additive change rides it, and a
 change of a higher class advances it.
 

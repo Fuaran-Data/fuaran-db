@@ -77,6 +77,12 @@ would reopen it.
     repository and goes red on any reference to a `Fuaran.UI.*`, `Fuaran.Program.*` or `ToolUp.*` package or
     project. *Reopen only* by a decision that names the coupling and why a seam cannot carry it.
 
+11. **One version, one pack script.** `<Version>` lives in `Directory.Build.props` and nowhere else;
+    `pack.ps1` packs `Fuaran.DB` into a local folder feed (by default the shared one three directories up)
+    and refuses to rewrite a slot already holding that version unless told to (`-QuietRepack` by hand,
+    `-Sweep` from a multi-package sweep). A folder feed keys on id and version, so a silent same-version
+    repack swaps the contract under every consumer pinned to it.
+
 ## 2026-10-03 — D1: the repository
 
 **Decided by the operator, 2026-10-03.** The domain gets a repository of its own, private for now, in the

@@ -11,7 +11,6 @@
     <WarnOn>3390;$(WarnOn)</WarnOn>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <PackageId>Fuaran.DB</PackageId>
-    <Version>0.1.0</Version>
     <Description>Fuaran.DB — the dataset model: a typed, default-deny tree of what a data source holds and what may be asked of it (sources, tables, columns with a type and a classification, permitted joins, measures, row policies and limits), with its op vocabulary, named validators, a check of a transform pipeline against the model, seeding and drift against a reported schema, a canonical wire codec and an AI-tools surface. Opens no connection. FSharp.Core and Fuaran.Core packages only.</Description>
     <RepositoryUrl>https://github.com/Fuaran-Data/fuaran-db</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
