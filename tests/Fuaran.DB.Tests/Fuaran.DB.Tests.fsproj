@@ -23,6 +23,7 @@
     <Compile Include="ProviderTests.fs" />
     <Compile Include="PolicyTests.fs" />
     <Compile Include="FingerprintTests.fs" />
+    <Compile Include="SubstraitSurveyTests.fs" />
     <Compile Include="Main.fs" />
   </ItemGroup>
 

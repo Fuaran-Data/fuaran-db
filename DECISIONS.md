@@ -1,5 +1,182 @@
 # Fuaran.DB — decisions (newest first)
 
+## 2026-10-11 — D7: Substrait as a second lowering target, measured and declined (Phase 1908)
+
+The question was whether the provider should also emit Substrait, the serialised relational-algebra format,
+so that every engine reading it is reached for the cost of one target rather than one dialect each. The
+phase measured first. **The answer is decline, for now.** 34 of the 58 constructs in the declared subset
+(58.6%) map onto the format without a pinned difference, 23 map only with one, and 1 does not map. Through
+the one consumer this domain's hosts already meet, 32 map, with every parameter reduced to a literal. The
+format standardises how a construct is SPELLED. It does not settle what it MEANS, so the parity work a
+dialect does is still done per consuming engine. Five rulings, each with what would reopen it.
+
+1. **The survey, from primary sources, read 2026-10-11.**
+   - *The specification* (`substrait-io/substrait`). Current release v0.106.0, 2026-10-11. The project is
+     pre-1.0 and releases weekly (v0.105.0 2026-10-04, v0.104.0 2026-09-27, v0.103.1 2026-09-20). Releases
+     still break: v0.98.0 removed deprecated fields, and v0.101.0 changed the extension identifiers to URNs.
+     Read at `main`: `proto/substrait/algebra.proto`, `proto/substrait/plan.proto`, the function catalogue
+     under `extensions/` (`functions_arithmetic`, `_arithmetic_decimal`, `_boolean`, `_comparison`,
+     `_string`, `_rounding`, `_rounding_decimal`, `_datetime`, `_aggregate_generic`), and the per-function
+     test cases under `tests/cases/`.
+   - *What it offers the subset.* `JoinRel` has `LEFT_SEMI` and `LEFT_ANTI`. `SortField` states nulls last in
+     either direction (`ASC_NULLS_LAST`, `DESC_NULLS_LAST`), which is D4.5's pin spelled as data. `FetchRel`
+     takes its count and offset as expressions. A plan can carry parameters: the `DynamicParameter`
+     expression, bound through `Plan.parameter_bindings`. The format also publishes a per-function test-case
+     corpus that a consumer can run, a function-level conformance suite.
+   - *The consumers* (`substrait.io/community/powered_by`, which carries no date). Acero and Velox consume.
+     DataFusion produces and consumes. DuckDB produces and consumes, through a community extension. Ibis
+     produces. Gluten turns Spark physical plans into Substrait. ADBC and Arrow Flight SQL carry plans as a
+     query form. There is also an R interface.
+   - *The DuckDB consumer* (`substrait-io/duckdb-substrait-extension`, last commit 2026-10-09). It is
+     installed `FROM community`, not shipped in DuckDB itself. It pins specification 0.102.0, four releases
+     behind. Its source (`src/from_substrait.cpp`) has no `DynamicParameter` case, so a parameter must reach
+     it as a literal. It reads a `FetchRel` count and offset only as integer literals. It reads one function
+     option, `distribution` for `std_dev`. Every other option a mapping relies on, such as `divide`'s
+     `on_division_by_zero`, is ignored, and the engine's own function decides. It refuses the
+     null-propagating `least` and `greatest` by design, because DuckDB has no such function, and it refuses
+     an integer `median`.
+   - *The format is not fully self-consistent yet.* `functions_arithmetic.yaml` lists `sqrt`'s
+     `on_domain_error` as `NAN` or `ERROR`, while the test case `sqrt(-1::i64) [on_domain_error:NAN]` answers
+     null.
+   - *.NET.* `Substrait.Net.Protobuf` 0.106.0 (Apache-2.0, 2026-10-11, depends on `Google.Protobuf` only) is
+     the generated bindings, released in step with the specification. `Substrait.Net` 0.1.1 is a higher-level
+     library. If the target is ever built, adopting the bindings is the route. Vendoring the `.proto` files
+     would only re-create a package that already tracks every release.
+
+2. **The mapping table.** Each construct the provider asks a dialect about, and each relation and expression
+   form the statement can carry, against the format. *Mapped* means the format's definition gives the
+   reference evaluator's answer. Where the format needs a cast to get there, the cast is exact (a 32-bit
+   integer to a 64-bit float), so the provider can insert it, and the row still counts as mapped. *Pinned*
+   means the format's definition leaves a difference that someone must pin or exclude. *Unmappable* means
+   the catalogue has nothing to map to. Rows marked *outside* are outside the declared subset (D4.4) and are
+   not counted.
+
+   | Construct | Format | Verdict | Reason |
+   |---|---|---|---|
+   | `Scan` | `ReadRel` over a `NamedTable`, `base_schema` from the model | mapped | physical identifiers only, as D4.3 |
+   | `Where` | `FilterRel` | mapped | |
+   | `Select` | `ProjectRel` with an emit mapping | mapped | the result is read positionally, as now |
+   | `Join` (form) | `JoinRel`, the condition an `and` of `equal`s | mapped | `equal` over a null key is null, so it matches nothing |
+   | `Aggregate` (form) | `AggregateRel`; `NonEmpty` as a `count()` measure, a filter on it, then a projection | mapped | the D4.5 pin, spelled as relations |
+   | `Ordered` | `SortRel` with `*_NULLS_LAST`, then `FetchRel` | mapped | nulls last is native to the format |
+   | `Not` | `not` | mapped | Kleene |
+   | `IsNull` | `is_null` | mapped | |
+   | `Coalesce` | `coalesce` | mapped | the format wants at least two arguments; one argument is itself |
+   | `Case` | `IfThen` | mapped | an untaken branch cannot raise, as in the reference |
+   | `InList` | `SingularOrList` | mapped | defined as a disjunction of `equal`s, which is three-valued membership |
+   | `Add` | `add` | pinned | a decimal result is `DECIMAL<P,S>`, capped at 38 digits with a scale-reduction rule, where the reference is exact and unbounded; int overflow is the `overflow: ERROR` option, which the consumer does not read |
+   | `Sub` | `subtract` | pinned | as `Add` |
+   | `Mul` | `multiply` | pinned | as `Add` |
+   | `Div` | `divide`, after an exact cast to fp64, `on_division_by_zero: NULL` | mapped | the reference always answers a float and a null on zero; decimal division is refused by the reference, which names `Quotient` |
+   | `Mod` | `modulus`, `division_type: TRUNCATE` | pinned | the catalogue has no division-by-zero option for `modulus`, so the reference's null on a zero divisor is not stated; decimal precision as `Add` |
+   | `Eq` | `equal` | mapped | null-propagating; int against float compared after an exact cast |
+   | `Ne` | `not_equal` | mapped | as `Eq` |
+   | `Lt` | `lt` | pinned | the reference orders strings ordinally, and the format states no collation, so the consumer's collation decides |
+   | `Le` | `lte` | pinned | as `Lt` |
+   | `Gt` | `gt` | pinned | as `Lt` |
+   | `Ge` | `gte` | pinned | as `Lt` |
+   | `And` | `and` | mapped | Kleene, as the catalogue states |
+   | `Or` | `or` | mapped | Kleene |
+   | `Contains` | `contains`, `case_sensitivity: CASE_SENSITIVE` | mapped | a literal substring with no wildcards; the test cases cover multi-byte text. This is better than SQL, where the reference dialect refuses it |
+   | `StartsWith` | `starts_with`, case-sensitive | mapped | as `Contains` |
+   | `EndsWith` | `ends_with`, case-sensitive | mapped | as `Contains` |
+   | `Abs` | `abs` | mapped | int overflow is the `ERROR` option, as the reference refuses |
+   | `Round` | `round(x, 0)`, `TIE_AWAY_FROM_ZERO` | pinned | the float form maps; the decimal overload (`functions_rounding_decimal`) declares no rounding mode, where the reference rounds half up |
+   | `Floor` | `floor` | mapped | fp64 after an exact cast; decimal through `functions_rounding_decimal` |
+   | `Ceil` | `ceil` | mapped | as `Floor` |
+   | `Substr` | `substring` | pinned | 1-based, and counted in characters (code points), where the reference is 0-based and counts UTF-16 units; a negative start is option-dependent in the format and clamped to 0 in the reference |
+   | `DatePart` | `extract` with `indexing: ONE` | pinned | answers an i64, not an int; the reference also reads a string operand, which the format reaches only through a cast |
+   | `Concat` | `concat`, `null_handling: ACCEPT_NULLS` | pinned | null propagation matches, but the reference stringifies a non-string argument by its own cell rendering, and the format needs a cast whose rendering is the consumer's |
+   | `Trim` | `trim(x, ' \t\r\n')` | mapped | the reference's pinned character set, passed as the argument |
+   | `Replace` | `replace` | pinned | an empty search string returns the subject in the reference; the format does not define it and has no test case for it |
+   | `DateDiffDays` | (none) | unmappable | the catalogue has no date-minus-date; `subtract` takes only an interval and answers a date |
+   | `Sqrt` | `sqrt` | pinned | a negative argument is null in the reference; the catalogue offers `NAN` or `ERROR`, and its own test case contradicts it |
+   | `Least` | `least` | mapped | null-propagating, as the reference; one argument is itself. The DuckDB consumer refuses it |
+   | `Greatest` | `greatest` | mapped | as `Least` |
+   | `IndexOf` | `strpos` minus one | pinned | `strpos` is 1-based and counts characters, where the reference counts UTF-16 units |
+   | `Length` | `char_length` | outside | D4.4; the format counts characters, which is the very unit question D4.4 names |
+   | `Lower` | `lower` | outside | D4.4; `char_set` is `UTF8` or `ASCII_ONLY`, with neither specified |
+   | `Upper` | `upper` | outside | as `Lower` |
+   | `Count` | `count(x)` | pinned | answers an i64, where the reference answers an int |
+   | `CountDistinct` | `count(x)`, invocation `DISTINCT` | pinned | as `Count` |
+   | `Sum` | `sum` | pinned | int into i64, where the reference refuses past int32 (D4.6); decimal into `DECIMAL<38,S>` |
+   | `Mean` | `avg` | pinned | `avg` over an i32 answers an i32 and over a decimal a decimal, where the reference answers a float, so a cast must precede it; the float summation order is the consumer's (D4.6) |
+   | `Min` | `min` | pinned | string order is the consumer's collation, as `Lt` |
+   | `Max` | `max` | pinned | as `Min` |
+   | `Median` | `median`, `precision: EXACT` | outside | D4.4; the consumer refuses the integer form |
+   | `StdDev` | `std_dev`, `distribution: POPULATION` | outside | D4.4; this is the one option the consumer reads |
+   | `First` | (none; `any_value` is arbitrary) | outside | D4.4 |
+   | `Last` | (none) | outside | D4.4 |
+   | `Inner` | `JOIN_TYPE_INNER` | mapped | |
+   | `Left` | `JOIN_TYPE_LEFT` | mapped | |
+   | `Semi` | `JOIN_TYPE_LEFT_SEMI` | mapped | |
+   | `Anti` | `JOIN_TYPE_LEFT_ANTI` | mapped | a null key matches nothing, so its row is kept, as the provider's `NOT EXISTS` keeps it |
+   | `Right` | `JOIN_TYPE_RIGHT` | outside | D4.4 |
+   | `Outer` | `JOIN_TYPE_OUTER` | outside | D4.4 |
+   | `IntType` | `i32` | mapped | |
+   | `FloatType` | `fp64` | mapped | |
+   | `BoolType` | `boolean` | mapped | |
+   | `StringType` | `string` | mapped | |
+   | `DateType` | `date`, days since the epoch | mapped | the canonical text converts exactly |
+   | `TimestampType` | `precision_timestamp_tz` | pinned | carries a precision and a time-zone reading, where the reference holds whole-second UTC text |
+   | `DecimalType` | `decimal`, `P ≤ 38` and a fixed `S` | pinned | the reference decimal is unparameterised; a value past 38 digits has no literal |
+
+   The count, by group: relation forms 6 of 6 mapped; expression forms 5 of 5; operators 8 of 16;
+   functions 6 of 14 (7 pinned, 1 unmappable); aggregates 0 of 6; join kinds 4 of 4; parameter types 5 of 7.
+   That is 34 of 58 mapped, 23 pinned and 1 unmappable. Through the DuckDB consumer, `Least` and `Greatest`
+   fall to refused, which leaves 32. No parameter reaches that consumer as a parameter. The suite holds this
+   table to the algebra: `SubstraitSurveyTests` goes red when the transform algebra gains a function,
+   operator, aggregate, join kind or column type this table does not classify, and when the counts above no
+   longer match the table's rows.
+
+3. **The decision: decline, with the evidence.** The shard names the measure, the share of the subset that
+   maps without a pinned difference, but no threshold. The threshold follows from what the target was for:
+   to reach engines "for the cost of one target and not one dialect each". It pays only if it removes
+   per-engine parity work. That needs two things. (a) Beyond the differences D4.6 already leaves to every
+   dialect, the format must add no pinned difference of its own. (b) At least one consumer must read the
+   format's parameters and honour the options the mapping relies on. Neither holds. On (a), of the 23 pinned
+   rows, the collation, decimal-scale, `Sum`-width and float-summation rows are D4.6's own differences in
+   the format's spelling. The rest are the format's own: 1-based character units (`Substr`, `IndexOf`),
+   i64 counts and an integer `avg`, `DatePart`, `Concat`'s rendering, `Replace`, `Sqrt`, decimal `Round`,
+   `Mod` by zero and the timestamp precision. `DateDiffDays` has no mapping at all. On (b), the one consumer
+   that reaches an engine the hosts already use reads no `DynamicParameter`, and reads one function option.
+   A pinned difference is therefore realised by each consumer's engine, not by the format, and each engine
+   needs its own conformance run, which is what a dialect costs. Building now would also ship a target with
+   no conformance run behind it. The kit is Phase 1901's and has not shipped. An engine run would also need
+   the community extension fetched at gate time, which this repository's gate does not do.
+   - *The ruling is the operator's to overturn.* (A) Accept the decline: no target package, and the
+     dialects (Phase 1901, and the second dialect) carry every engine, a DuckDB one included. (B) Build
+     anyway, on `Substrait.Net.Protobuf`, as a target for DataFusion, Velox and Acero, which read no SQL from
+     this provider, with the 24 non-mapped rows refused through the target's own `Refuses` and the
+     parameters inlined as typed literals. B buys reach to engines no host here uses today, at the cost of a
+     pre-1.0 dependency that releases weekly and still breaks.
+   - *Reopen when any of these holds.* The format reaches 1.0, or states a compatibility policy. A consumer
+     that a host here uses reads `DynamicParameter` and honours function options. A client needs an engine
+     reachable only by a plan. The catalogue gains a date difference and states a string collation. The
+     table above is then re-measured, not assumed, and the suite's test says where to start.
+
+4. **If a plan target is ever built, it is not a `Dialect`.** The dialect record (D4.8) is shaped for text:
+   it quotes identifiers, writes parameter markers, renders functions over rendered strings, and renders
+   paging. A plan target spells none of that. It reads the statement's abstract form, `Statement.Form` (the
+   `Relation` tree, with its outputs, physical identifiers and parameter ordinals), together with
+   `Statement.Parameters`, and builds the plan from them. The form already is the plan in all but encoding.
+   The half of the seam a target shares with the dialects is `Refuses`, which is what places the fold
+   boundary. The seam would therefore split in two. (a) A capability half, `Refuses` (and `MapType` for
+   reports), which `FoldSplit` asks. (b) A spelling half: text for a dialect, a plan emitted over the
+   finished `Statement` for a target. The record is NOT split now. There is one implementer of the spelling
+   half, the change would be a breaking change to a seam D4.8 holds open for its first real dialect, and
+   reuse over a new abstraction needs the second implementer first. *Reopen* when a plan target is accepted
+   under 3(B) or a reopening, and split the record in the same change, recorded as a breaking change in
+   `STABILITY.md`.
+
+5. **The positioning in the plan is corrected** where the survey was written from memory. Substrait is
+   pre-1.0, so "a query as serialised data" exists, but not yet as a stable contract. The claim that "the
+   tools above document the differences between their backends; they do not certify agreement" overstates
+   the gap. The format publishes a per-function test-case corpus a consumer can run. What it does not
+   certify is plan-level parity against a reference evaluator, which is the distinction this domain draws.
+   And the plan's Q9 premise that the format reaches its engines "for little cost" is the one measured here
+   and found false. The engines are reached, but each still answers the parity question for itself.
+
 ## 2026-10-11 — D6: a cheap source fingerprint (Phase 2008)
 
 A host that re-runs work when a source changes needs to learn that it changed without reading it. A source
