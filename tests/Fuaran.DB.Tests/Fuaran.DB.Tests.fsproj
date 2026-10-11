@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <WarningsAsErrors>$(WarningsAsErrors);FS0025</WarningsAsErrors>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Sample.fs" />
+    <Compile Include="ModelTests.fs" />
+    <Compile Include="RulesTests.fs" />
+    <Compile Include="PipelineTests.fs" />
+    <Compile Include="DriftTests.fs" />
+    <Compile Include="WireTests.fs" />
+    <Compile Include="CorpusTests.fs" />
+    <Compile Include="ConformanceTests.fs" />
+    <Compile Include="BoundaryTests.fs" />
+    <Compile Include="Main.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Update="FSharp.Core" Version="10.1.300" />
+    <PackageReference Include="Expecto" Version="10.2.3" />
+    <PackageReference Include="Fuaran.Core.Conformance" Version="0.36.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Fuaran.DB\Fuaran.DB.fsproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Fuaran.DB/Fuaran.DB.fsproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Fuaran.DB.Tests/Fuaran.DB.Tests.fsproj" />
+  </Folder>
+</Solution>

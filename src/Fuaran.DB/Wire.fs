@@ -1,0 +1,425 @@
+namespace Fuaran.DB
+
+open Fuaran.Core
+open Fuaran.Compute
+
+/// Why a wire text is not a dataset model (or a model op). Each case carries the JSON path it
+/// names; `ModelWire.code` gives the stable code a conformance vector asserts.
+[<RequireQualifiedAccess>]
+type WireError =
+    | NotJson of detail: string
+    | MissingField of path: string * field: string
+    | UnknownField of path: string * field: string
+    | WrongShape of path: string * expected: string
+    | UnknownKind of path: string * got: string * expected: string list
+    | UnknownColumnType of path: string * got: string * expected: string list
+    | UnknownAggregate of path: string * got: string * expected: string list
+    | BadExpression of path: string * detail: string
+    | UnsupportedVersion of got: int * supported: int list
+
+/// The canonical wire codec for the dataset model, its state and its ops. Canonical: object keys
+/// sorted (Core's `Canon.render`), `$type`-tagged, one spelling per value, so equal models render
+/// to equal bytes. Strict: an unknown field, a missing one, or a kind the vocabulary does not
+/// declare is a named refusal, never a default.
+module ModelWire =
+
+    /// The wire version this codec writes and the only one it reads.
+    [<Literal>]
+    let Version = 1
+
+    /// The stable code of a wire error.
+    let code (e: WireError) : string =
+        match e with
+        | WireError.NotJson _ -> "DB-WIRE-NOT-JSON"
+        | WireError.MissingField _ -> "DB-WIRE-MISSING-FIELD"
+        | WireError.UnknownField _ -> "DB-WIRE-UNKNOWN-FIELD"
+        | WireError.WrongShape _ -> "DB-WIRE-WRONG-SHAPE"
+        | WireError.UnknownKind _ -> "DB-WIRE-UNKNOWN-KIND"
+        | WireError.UnknownColumnType _ -> "DB-WIRE-UNKNOWN-COLUMN-TYPE"
+        | WireError.UnknownAggregate _ -> "DB-WIRE-UNKNOWN-AGGREGATE"
+        | WireError.BadExpression _ -> "DB-WIRE-BAD-EXPRESSION"
+        | WireError.UnsupportedVersion _ -> "DB-WIRE-UNSUPPORTED-VERSION"
+
+    /// A wire error as one sentence.
+    let describe (e: WireError) : string =
+        match e with
+        | WireError.NotJson d -> "not JSON: " + d
+        | WireError.MissingField(p, f) -> sprintf "%s: missing field '%s'" p f
+        | WireError.UnknownField(p, f) -> sprintf "%s: field '%s' is not part of this shape" p f
+        | WireError.WrongShape(p, x) -> sprintf "%s: expected %s" p x
+        | WireError.UnknownKind(p, g, xs) -> sprintf "%s: kind '%s' is not one of %s" p g (String.concat ", " xs)
+        | WireError.UnknownColumnType(p, g, xs) ->
+            sprintf "%s: column type '%s' is not one of %s" p g (String.concat ", " xs)
+        | WireError.UnknownAggregate(p, g, xs) ->
+            sprintf "%s: aggregate '%s' is not one of %s" p g (String.concat ", " xs)
+        | WireError.BadExpression(p, d) -> sprintf "%s: %s" p d
+        | WireError.UnsupportedVersion(g, xs) ->
+            sprintf "version %d is not supported; this codec reads %s" g (xs |> List.map string |> String.concat ", ")
+
+    // ---- aggregates: the transform algebra's own tags ----
+
+    let aggTag (fn: AggFn) : string =
+        match fn with
+        | Sum -> "sum"
+        | Mean -> "mean"
+        | Min -> "min"
+        | Max -> "max"
+        | Count -> "count"
+        | Median -> "median"
+        | StdDev -> "stddev"
+        | First -> "first"
+        | Last -> "last"
+        | CountDistinct -> "countDistinct"
+
+    let private allAggs =
+        [ Sum; Mean; Min; Max; Count; Median; StdDev; First; Last; CountDistinct ]
+
+    let private aggOf (tag: string) : AggFn option =
+        allAggs |> List.tryFind (fun a -> aggTag a = tag)
+
+    // ---- encode ----
+
+    let private strs (xs: string list) = JArr(xs |> List.map JStr)
+
+    /// A kind's tag and its payload fields.
+    let private kindFields (k: NodeKind) : (string * JVal) list =
+        match k with
+        | NodeKind.Model s -> [ "name", JStr s.Name; "classifications", strs s.Classifications ]
+        | NodeKind.Source s -> [ "name", JStr s.Name ]
+        | NodeKind.Table s -> [ "name", JStr s.Name; "physical", JStr s.Physical ]
+        | NodeKind.Column s ->
+            [ "name", JStr s.Name
+              "physical", JStr s.Physical
+              "type", JStr(ColumnType.tag s.Type)
+              "classification", JStr s.Classification ]
+        | NodeKind.Join s ->
+            [ "name", JStr s.Name
+              "left", JStr s.Left
+              "right", JStr s.Right
+              "on", JArr(s.On |> List.map (fun (l, r) -> JObj [ "left", JStr l; "right", JStr r ])) ]
+        | NodeKind.Measure s -> [ "name", JStr s.Name; "fn", JStr(aggTag s.Fn); "column", JStr s.Column ]
+        | NodeKind.RowPolicy s -> [ "name", JStr s.Name; "predicate", DataFrameCodec.encodeExpr s.Predicate ]
+        | NodeKind.Limit s -> [ "name", JStr s.Name; "maxRows", JInt s.MaxRows ]
+
+    let private isContainerTag (tag: string) =
+        not (List.isEmpty (ModelNode.allowedChildren tag))
+
+    let rec private nodeJson (n: ModelNode) : JVal =
+        let tag = ModelNode.kindTag n.Kind
+
+        let children =
+            if isContainerTag tag then
+                [ "children", JArr(n.Children |> List.map nodeJson) ]
+            else
+                []
+
+        Canon.typed tag (("id", JStr n.Id) :: kindFields n.Kind @ children)
+
+    /// A node (and its subtree) as a `JVal`. A leaf kind writes no `children` field.
+    let encodeNodeJson (n: ModelNode) : JVal = nodeJson n
+
+    /// A model state as a `JVal`: the versioned envelope.
+    let encodeStateJson (s: ModelState) : JVal =
+        Canon.typed
+            "datasetModel"
+            [ "version", JInt Version
+              "root", nodeJson s.Root
+              "retired", strs (Set.toList s.Retired) ]
+
+    /// An op as a `JVal`.
+    let encodeOpJson (op: ModelOp) : JVal =
+        match op with
+        | ModelOp.Add(parent, node) -> Canon.typed "add" [ "parent", JStr parent; "node", nodeJson node ]
+        | ModelOp.Amend(id, kind) ->
+            Canon.typed
+                "amend"
+                [ "id", JStr id
+                  "kind", Canon.typed (ModelNode.kindTag kind) (kindFields kind) ]
+        | ModelOp.Retire id -> Canon.typed "retire" [ "id", JStr id ]
+
+    /// A node's canonical text.
+    let encodeNode (n: ModelNode) : string = Canon.render (nodeJson n)
+
+    /// A model state's canonical text.
+    let encodeState (s: ModelState) : string = Canon.render (encodeStateJson s)
+
+    /// An op's canonical text — what the op-stream hashes.
+    let encodeOp (op: ModelOp) : string = Canon.render (encodeOpJson op)
+
+    // ---- decode ----
+
+    let private fieldsOf (path: string) (v: JVal) : Result<(string * JVal) list, WireError> =
+        match v with
+        | JObj fs -> Ok fs
+        | _ -> Error(WireError.WrongShape(path, "an object"))
+
+    let private only (path: string) (allowed: string list) (fs: (string * JVal) list) : Result<unit, WireError> =
+        match fs |> List.tryFind (fun (k, _) -> not (List.contains k allowed)) with
+        | Some(k, _) -> Error(WireError.UnknownField(path, k))
+        | None -> Ok()
+
+    let private field (path: string) (name: string) (fs: (string * JVal) list) : Result<JVal, WireError> =
+        match fs |> List.tryFind (fun (k, _) -> k = name) with
+        | Some(_, v) -> Ok v
+        | None -> Error(WireError.MissingField(path, name))
+
+    let private str (path: string) (name: string) fs : Result<string, WireError> =
+        field path name fs
+        |> Result.bind (fun v ->
+            match v with
+            | JStr s -> Ok s
+            | _ -> Error(WireError.WrongShape(path + "." + name, "a string")))
+
+    let private intField (path: string) (name: string) fs : Result<int, WireError> =
+        field path name fs
+        |> Result.bind (fun v ->
+            match v with
+            | JInt i -> Ok i
+            | _ -> Error(WireError.WrongShape(path + "." + name, "an integer")))
+
+    let private arr (path: string) (name: string) fs : Result<JVal list, WireError> =
+        field path name fs
+        |> Result.bind (fun v ->
+            match v with
+            | JArr xs -> Ok xs
+            | _ -> Error(WireError.WrongShape(path + "." + name, "an array")))
+
+    let private traverse (f: int -> 'a -> Result<'b, WireError>) (xs: 'a list) : Result<'b list, WireError> =
+        xs
+        |> List.indexed
+        |> List.fold (fun acc (i, x) -> acc |> Result.bind (fun ys -> f i x |> Result.map (fun y -> y :: ys))) (Ok [])
+        |> Result.map List.rev
+
+    let private strList (path: string) (name: string) fs : Result<string list, WireError> =
+        arr path name fs
+        |> Result.bind (
+            traverse (fun i v ->
+                match v with
+                | JStr s -> Ok s
+                | _ -> Error(WireError.WrongShape(sprintf "%s.%s[%d]" path name i, "a string")))
+        )
+
+    /// The `Result` computation expression the decoders are written in.
+    type private ResultBuilder() =
+        member _.Bind(r: Result<'a, WireError>, f: 'a -> Result<'b, WireError>) = Result.bind f r
+        member _.Return(x: 'a) : Result<'a, WireError> = Ok x
+        member _.ReturnFrom(r: Result<'a, WireError>) = r
+
+    let private result = ResultBuilder()
+
+    /// The payload fields a kind declares, beside `$type`.
+    let private payloadFields (tag: string) : string list =
+        match tag with
+        | "model" -> [ "name"; "classifications" ]
+        | "source" -> [ "name" ]
+        | "table" -> [ "name"; "physical" ]
+        | "column" -> [ "name"; "physical"; "type"; "classification" ]
+        | "join" -> [ "name"; "left"; "right"; "on" ]
+        | "measure" -> [ "name"; "fn"; "column" ]
+        | "rowPolicy" -> [ "name"; "predicate" ]
+        | "limit" -> [ "name"; "maxRows" ]
+        | _ -> []
+
+    let private pairOf (path: string) (v: JVal) : Result<string * string, WireError> =
+        result {
+            let! fs = fieldsOf path v
+            do! only path [ "left"; "right" ] fs
+            let! l = str path "left" fs
+            let! r = str path "right" fs
+            return l, r
+        }
+
+    let private kindOf (path: string) (tag: string) fs : Result<NodeKind, WireError> =
+        match tag with
+        | "model" ->
+            result {
+                let! name = str path "name" fs
+                let! cls = strList path "classifications" fs
+                return NodeKind.Model { Name = name; Classifications = cls }
+            }
+        | "source" -> str path "name" fs |> Result.map (fun name -> NodeKind.Source { Name = name })
+        | "table" ->
+            result {
+                let! name = str path "name" fs
+                let! physical = str path "physical" fs
+                return NodeKind.Table { Name = name; Physical = physical }
+            }
+        | "column" ->
+            result {
+                let! name = str path "name" fs
+                let! physical = str path "physical" fs
+                let! tyTag = str path "type" fs
+                let! cls = str path "classification" fs
+
+                let! ty =
+                    match ColumnType.ofTag tyTag with
+                    | Some ty -> Ok ty
+                    | None -> Error(WireError.UnknownColumnType(path + ".type", tyTag, ColumnType.allTags))
+
+                return
+                    NodeKind.Column
+                        { Name = name
+                          Physical = physical
+                          Type = ty
+                          Classification = cls }
+            }
+        | "join" ->
+            result {
+                let! name = str path "name" fs
+                let! left = str path "left" fs
+                let! right = str path "right" fs
+                let! on = arr path "on" fs
+                let! pairs = on |> traverse (fun i v -> pairOf (sprintf "%s.on[%d]" path i) v)
+
+                return
+                    NodeKind.Join
+                        { Name = name
+                          Left = left
+                          Right = right
+                          On = pairs }
+            }
+        | "measure" ->
+            result {
+                let! name = str path "name" fs
+                let! fnTag = str path "fn" fs
+                let! column = str path "column" fs
+
+                let! fn =
+                    match aggOf fnTag with
+                    | Some fn -> Ok fn
+                    | None -> Error(WireError.UnknownAggregate(path + ".fn", fnTag, allAggs |> List.map aggTag))
+
+                return
+                    NodeKind.Measure
+                        { Name = name
+                          Fn = fn
+                          Column = column }
+            }
+        | "rowPolicy" ->
+            result {
+                let! name = str path "name" fs
+                let! pred = field path "predicate" fs
+
+                let! expr =
+                    DataFrameCodec.decodeExpr pred
+                    |> Result.mapError (fun e -> WireError.BadExpression(path + ".predicate", sprintf "%A" e))
+
+                return NodeKind.RowPolicy { Name = name; Predicate = expr }
+            }
+        | "limit" ->
+            result {
+                let! name = str path "name" fs
+                let! maxRows = intField path "maxRows" fs
+                return NodeKind.Limit { Name = name; MaxRows = maxRows }
+            }
+        | other -> Error(WireError.UnknownKind(path + ".$type", other, ModelNode.allKindTags))
+
+    let rec private decodeNodeAt (path: string) (v: JVal) : Result<ModelNode, WireError> =
+        result {
+            let! fs = fieldsOf path v
+            let! tag = str path "$type" fs
+            let container = isContainerTag tag
+
+            let allowed =
+                [ "$type"; "id" ]
+                @ payloadFields tag
+                @ (if container then [ "children" ] else [])
+
+            let! kind = kindOf path tag fs
+            do! only path allowed fs
+            let! id = str path "id" fs
+
+            let! children =
+                if container then
+                    arr path "children" fs
+                    |> Result.bind (traverse (fun i c -> decodeNodeAt (sprintf "%s.children[%d]" path i) c))
+                else
+                    Ok []
+
+            return
+                { Id = id
+                  Kind = kind
+                  Children = children }
+        }
+
+    let private parse (text: string) : Result<JVal, WireError> =
+        Json.parse text |> Result.mapError WireError.NotJson
+
+    /// A node (and its subtree) from a `JVal`.
+    let decodeNodeJson (v: JVal) : Result<ModelNode, WireError> = decodeNodeAt "$" v
+
+    /// A model state from a `JVal`.
+    let decodeStateJson (v: JVal) : Result<ModelState, WireError> =
+        let path = "$"
+
+        result {
+            let! fs = fieldsOf path v
+            let! tag = str path "$type" fs
+
+            if tag <> "datasetModel" then
+                return! Error(WireError.UnknownKind(path + ".$type", tag, [ "datasetModel" ]))
+            else
+                do! only path [ "$type"; "version"; "root"; "retired" ] fs
+                let! version = intField path "version" fs
+
+                if version <> Version then
+                    return! Error(WireError.UnsupportedVersion(version, [ Version ]))
+                else
+                    let! rootJson = field path "root" fs
+                    let! root = decodeNodeAt "$.root" rootJson
+                    let! retired = strList path "retired" fs
+
+                    return
+                        { Root = root
+                          Retired = Set.ofList retired }
+        }
+
+    /// An op from a `JVal`.
+    let decodeOpJson (v: JVal) : Result<ModelOp, WireError> =
+        let path = "$"
+
+        result {
+            let! fs = fieldsOf path v
+            let! tag = str path "$type" fs
+
+            match tag with
+            | "add" ->
+                do! only path [ "$type"; "parent"; "node" ] fs
+                let! parent = str path "parent" fs
+                let! nodeJson = field path "node" fs
+                let! node = decodeNodeAt "$.node" nodeJson
+                return ModelOp.Add(parent, node)
+            | "amend" ->
+                do! only path [ "$type"; "id"; "kind" ] fs
+                let! id = str path "id" fs
+                let! kindJson = field path "kind" fs
+                let kp = "$.kind"
+                let! kfs = fieldsOf kp kindJson
+                let! ktag = str kp "$type" kfs
+                let! kind = kindOf kp ktag kfs
+                do! only kp ("$type" :: payloadFields ktag) kfs
+                return ModelOp.Amend(id, kind)
+            | "retire" ->
+                do! only path [ "$type"; "id" ] fs
+                let! id = str path "id" fs
+                return ModelOp.Retire id
+            | other -> return! Error(WireError.UnknownKind(path + ".$type", other, [ "add"; "amend"; "retire" ]))
+        }
+
+    /// A node from canonical text.
+    let decodeNode (text: string) : Result<ModelNode, WireError> =
+        parse text |> Result.bind decodeNodeJson
+
+    /// A model state from canonical text.
+    let decodeState (text: string) : Result<ModelState, WireError> =
+        parse text |> Result.bind decodeStateJson
+
+    /// An op from canonical text.
+    let decodeOp (text: string) : Result<ModelOp, WireError> = parse text |> Result.bind decodeOpJson
+
+    /// Core's stream witness over the model: the reducer and this codec. A record's hash folds the
+    /// op's canonical text, so a stream verifies on any host that renders the same bytes.
+    let streamWitness: StreamWitness<ModelOp, ModelState, ModelRejection> =
+        { Apply = ModelOps.apply
+          Encode = encodeOp
+          Decode = fun text -> decodeOp text |> Result.mapError describe }

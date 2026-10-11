@@ -1,0 +1,92 @@
+[
+  {
+    "name": "not-json",
+    "as": "node",
+    "input": "{",
+    "code": "DB-WIRE-NOT-JSON"
+  },
+  {
+    "name": "unknown-kind",
+    "as": "node",
+    "input": "{\"$type\":\"view\",\"id\":\"v\"}",
+    "code": "DB-WIRE-UNKNOWN-KIND"
+  },
+  {
+    "name": "missing-id",
+    "as": "node",
+    "input": "{\"$type\":\"source\",\"children\":[],\"name\":\"s\"}",
+    "code": "DB-WIRE-MISSING-FIELD"
+  },
+  {
+    "name": "missing-children",
+    "as": "node",
+    "input": "{\"$type\":\"source\",\"id\":\"s\",\"name\":\"s\"}",
+    "code": "DB-WIRE-MISSING-FIELD"
+  },
+  {
+    "name": "unknown-field",
+    "as": "node",
+    "input": "{\"$type\":\"limit\",\"id\":\"l\",\"maxRows\":5,\"name\":\"x\",\"note\":\"y\"}",
+    "code": "DB-WIRE-UNKNOWN-FIELD"
+  },
+  {
+    "name": "leaf-with-children",
+    "as": "node",
+    "input": "{\"$type\":\"limit\",\"children\":[],\"id\":\"l\",\"maxRows\":5,\"name\":\"x\"}",
+    "code": "DB-WIRE-UNKNOWN-FIELD"
+  },
+  {
+    "name": "unknown-column-type",
+    "as": "node",
+    "input": "{\"$type\":\"column\",\"classification\":\"p\",\"id\":\"c\",\"name\":\"a\",\"physical\":\"A\",\"type\":\"money\"}",
+    "code": "DB-WIRE-UNKNOWN-COLUMN-TYPE"
+  },
+  {
+    "name": "unknown-aggregate",
+    "as": "node",
+    "input": "{\"$type\":\"measure\",\"column\":\"c\",\"fn\":\"mode\",\"id\":\"m\",\"name\":\"x\"}",
+    "code": "DB-WIRE-UNKNOWN-AGGREGATE"
+  },
+  {
+    "name": "bad-predicate",
+    "as": "node",
+    "input": "{\"$type\":\"rowPolicy\",\"id\":\"p\",\"name\":\"x\",\"predicate\":{\"$type\":\"nope\"}}",
+    "code": "DB-WIRE-BAD-EXPRESSION"
+  },
+  {
+    "name": "string-limit",
+    "as": "node",
+    "input": "{\"$type\":\"limit\",\"id\":\"l\",\"maxRows\":\"5\",\"name\":\"x\"}",
+    "code": "DB-WIRE-WRONG-SHAPE"
+  },
+  {
+    "name": "join-pair-shape",
+    "as": "node",
+    "input": "{\"$type\":\"join\",\"id\":\"j\",\"left\":\"a\",\"name\":\"x\",\"on\":[[\"a\",\"b\"]],\"right\":\"b\"}",
+    "code": "DB-WIRE-WRONG-SHAPE"
+  },
+  {
+    "name": "unsupported-version",
+    "as": "state",
+    "input": "{\"$type\":\"datasetModel\",\"retired\":[],\"root\":{},\"version\":2}",
+    "code": "DB-WIRE-UNSUPPORTED-VERSION"
+  },
+  {
+    "name": "not-a-model-envelope",
+    "as": "state",
+    "input": "{\"$type\":\"model\",\"classifications\":[],\"children\":[],\"id\":\"m\",\"name\":\"m\"}",
+    "code": "DB-WIRE-UNKNOWN-KIND"
+  },
+  {
+    "name": "unknown-op",
+    "as": "op",
+    "input": "{\"$type\":\"rename\",\"id\":\"x\",\"name\":\"y\"}",
+    "code": "DB-WIRE-UNKNOWN-KIND"
+  },
+  {
+    "name": "amend-kind-carries-id",
+    "as": "op",
+    "input": "{\"$type\":\"amend\",\"id\":\"l\",\"kind\":{\"$type\":\"limit\",\"id\":\"l\",\"maxRows\":5,\"name\":\"x\"}}",
+    "code": "DB-WIRE-UNKNOWN-FIELD"
+  }
+]

@@ -1,0 +1,1 @@
+{"$type":"amend","id":"c:orders.revenue","kind":{"$type":"column","classification":"public","name":"amount","physical":"REVENUE","type":"decimal"}}

@@ -1,0 +1,1 @@
+{"$type":"add","node":{"$type":"column","classification":"public","id":"c:orders.discount","name":"discount","physical":"DISCOUNT","type":"decimal"},"parent":"t:orders"}

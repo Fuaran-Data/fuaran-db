@@ -22,7 +22,11 @@ No package here opens a connection: the host supplies the executor.
 
 ## Status
 
-New. Nothing here is usable yet. [`DECISIONS.md`](DECISIONS.md) records the decisions taken so far.
+Pre-release. `Fuaran.DB` holds the dataset model: its node kinds and op vocabulary, the model rules, the
+check of a pipeline against a model, seeding and drift against a reported schema, a canonical wire codec with
+its conformance corpus in [`wire-fixtures/`](wire-fixtures/), and an AI-tools surface. The provider that
+lowers a pipeline is not here yet. [`DECISIONS.md`](DECISIONS.md) records the decisions taken so far, and
+[`STABILITY.md`](STABILITY.md) what is a contract.
 
 ## Building
 

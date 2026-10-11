@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "description": "The dataset model's wire conformance corpus. SELF-ENUMERATED: each family's 'vectors' is authoritative, and the suite fails on a vector on disk the manifest does not count as surely as on a counted one that is missing. Accept vectors are canonical texts: each decodes and re-encodes to its own bytes, with no trailing newline. Reject vectors name the code the decoder must refuse them with.",
+  "families": [
+    {
+      "id": "states",
+      "kind": "accept-state",
+      "path": "states",
+      "vectors": 4,
+      "description": "Model states in the versioned envelope: the worked retail model, the same with a table retired, a model seeded from a reported schema, and an empty model."
+    },
+    {
+      "id": "ops",
+      "kind": "accept-op",
+      "path": "ops",
+      "vectors": 5,
+      "description": "One op per kind: add (a leaf and a subtree), amend (a rename, a limit), retire."
+    },
+    {
+      "id": "rejects",
+      "kind": "reject",
+      "path": "rejects.json",
+      "vectors": 15,
+      "description": "Texts the decoder refuses, each with its code."
+    }
+  ]
+}
