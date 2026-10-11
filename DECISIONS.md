@@ -1,5 +1,123 @@
 # Fuaran.DB — decisions (newest first)
 
+## 2026-10-11 — D4: the provider and the fold split (Phase 1900)
+
+The second package, `Fuaran.DB.Provider`: a pure function from a dataset model, a dialect, a pipeline and its
+bindings to one parameterised statement and the steps left to run locally, or a named refusal. Ten rulings,
+each with what would reopen it.
+
+1. **The provider is pure and references nothing but its substrate.** `FSharp.Core`, `Fuaran.DB`,
+   `Fuaran.Compute.DataFrame` 0.38.1 and `Fuaran.Core.Conformance` 0.36.0 (for the law vocabulary); it opens no
+   connection, reads no clock and references no ADO type. A test reads the project file and goes red on any
+   other reference. *Reopen only* by a decision that names the coupling and why a seam cannot carry it.
+2. **Bind, plan, split, in that order.** `FoldSplit.lower` substitutes the bindings (scalar parameters and
+   slots, list parameters, and the clock once per grain), runs the compute planner (`Plan.explain`) over the
+   source's model schema, and walks the PLANNED pipeline, lowering the longest prefix every step of which
+   lowers. The planner's reorders therefore reach the split: a filter it moves ahead of a sort lowers with
+   the page. The suffix is the rest of the planned pipeline; `FoldSplit.finish` runs it in the reference
+   evaluator over the statement's result. `explain` answers the planner's report, how many planned steps
+   lowered, and the refusal that placed the boundary, and `describe` says it in sentences.
+   - **Reduce or preserve.** Every verb in the subset keeps or drops rows, except a join, which can fan out.
+     A join is admitted only along a relation the model declares, which is the model author's statement of
+     how the tables relate; the model has no cardinality to check a fan-out against. *Reopen if* `JoinSpec`
+     gains a cardinality: a many-to-many join then places the boundary.
+3. **The statement is data first and text second.** A `Statement` is the text, the parameters in marker
+   order (each a cell with its column type and the dialect's name for it), the result columns, and the
+   abstract `Relation` the text was rendered from, one nested select per step. The result is read
+   POSITIONALLY into the pipeline's names (`Statement.toTable`), so no pipeline name is ever emitted.
+   - **No value is text**: `Scalar` has no literal case. A literal, a bound parameter, a bound list, a
+     pinned clock reading and a page's count and offset all become parameters. A parameter's type is its
+     cell's; a null takes the type of what it is compared with, and a null nothing fixes places the
+     boundary (`Untyped`).
+   - **No identifier comes from the request** (the plan's D7): a scan names the model's PHYSICAL table and
+     column identifiers, and every other identifier is minted (`c<n>` for columns, `t<n>` for derived
+     tables). A join's keys are followed through renames to the model columns they came from, so a
+     renamed key still names its declared relation (this is the column provenance D2.6 named as its
+     reopening; the pipeline check is unchanged).
+4. **The declared subset** (the plan's D5), with the evidence of recipe 07 (`fuaran-core#278`, the pushdown
+   measurement: its difference list and friction findings, measured on SQLite at Core 0.30.0) beside each
+   exclusion. A construct outside it places the boundary and runs locally, where the reference
+   says what it means.
+   - **Lowered:** `Filter` over a predicate the planner's totality verdict admits and that is statically
+     boolean (`Col`, values, `Binary`, `Not`, `IsNull`, `Coalesce`, `Case`, `InList`, `ApplyFn`); `Project`;
+     `Join` of kind `Inner`, `Left`, `Semi` or `Anti` along a declared relation; `GroupBy` with `Count`,
+     `CountDistinct`, `Sum`, `Mean`, `Min` and `Max`; `Sort` immediately followed by `Limit`, as one page that
+     ends the statement. The recipe lowered this list plus `Derive` with 0 mismatches over 418 pipelines
+     under its full pin set.
+   - **`Pivot` never lowers**: it would turn data values into identifiers (the plan's D6 and sixth finding;
+     the recipe's chart case and `orders-by-segment` both stop at it).
+   - **`Derive`, `Window`, `Distinct`, `Unpivot`, `Union`, `Intersect`, `Except` do not lower.** `Derive`:
+     20 lines, "a derived column's type over no rows or only nulls" (`probe-derived-type-empty`, `gen-1008`,
+     F2); compute's D5 (0.38.1) now types a decided derive statically, which removes most of that class.
+     *Reopen* for `Derive` on that evidence. `Window`: the recipe did not lower it (`top-lines-per-category`
+     stops before it, section 8), and its frame is order-sensitive. `Distinct`: its identity is the
+     canonical token (`Int 1` is not `Float 1.0`, NaN is one value), which SQL's does not share; not
+     measured. `Unpivot` and the set operations grow or combine rows and were not lowered by the recipe.
+   - **A `Limit` with no `Sort` before it, a `Sort` with no `Limit` after it, and any step after a page do
+     not lower**: "row order (a relation is unordered)", 10 lines (`gen-1021`), and "an order-sensitive local
+     step after an unordered statement", 3 lines (`probe-order-sensitive-suffix`); the recipe's split stopped
+     34 pipelines at an unordered limit and 83 at a sort.
+   - **`Right` and `Outer` joins do not lower**: the recipe did not lower them (4 pipelines, its
+     `JoinKindNotLowered`), and they append unmatched right rows after the left ones, an order a relation
+     does not keep.
+   - **`Median`, `StdDev`, `First` and `Last` do not lower**: `Median` was refused by the recipe (10
+     pipelines at an aggregate); `First` and `Last` read row order; `StdDev` is the population deviation here
+     and engines differ on which they compute (not measured).
+   - **`Cast` does not lower**: "type affinity (the engine coerces where the reference refuses)", 12 lines
+     (`probe-type-affinity`, `gen-1011`), and 4 pipelines stopped at a cast or a clock.
+   - **`Lower` and `Upper` do not lower**: "case folding beyond ASCII", 3 lines (`probe-case-folding`,
+     `gen-1147`, `gen-1260`). **`Length` does not lower**: "string length unit", 1 line
+     (`probe-length-unit`).
+   - **`Quotient` and `Rounded` do not lower**: the recipe's pin predates the decimal type and exact
+     rounding, so decimal scale, the difference the plan's D8 names, was not reachable. *Reopen* when a
+     dialect's conformance run measures it.
+   - **A membership test against an empty list does not lower**: SQL cannot spell `IN ()`.
+   - **A predicate the totality verdict does not admit does not lower** (`MayRefuse`): an engine coerces or
+     widens where the reference refuses (type affinity, 12 lines; integer width, 1 line,
+     `probe-int-overflow`), so the step runs where the reference reports it.
+   - **The substring operators are the DIALECT's call, not the subset's**: "pattern matching", 7 lines,
+     pinned on SQLite and predicted refused on T-SQL, so `Contains`, `StartsWith` and `EndsWith` lower unless
+     a dialect refuses them.
+5. **Pinned in the form, not by the dialect**, each a difference the recipe measured: nulls sort last in
+   either direction (5 lines, `probe-null-ordering`, `gen-1188`), which every order key of a page states
+   and `RenderPaging` must spell; a keyless aggregate over no rows answers none (6 lines,
+   `probe-empty-global-aggregate`), which `Aggregate`'s `NonEmpty` states and the renderer spells as
+   `HAVING COUNT(*) > 0`; a negative count or offset (4 lines, `probe-negative-limit`) is clamped to zero at
+   bind, as the reference clamps it; a repeated column name (1 line, `probe-repeated-name`, F1) places the
+   boundary, because a result is read back by name.
+6. **The remaining differences are a dialect's to pin or exclude** (Phase 1901): collation (2 lines),
+   integer division (1), float summation order (2), sort stability under ties (1), decimal scale, and the
+   integer width of a pushed `Sum` (1). The last is the one place a lowered prefix can refuse: the reference
+   dialect refuses it as the reference does, and a real dialect pins it where it decodes the result.
+   Parity is claimed as written over the reference dialect, which keeps arrival order; over a real engine
+   the claim is the conformance subset Phase 1901 states (bag parity unless a page ends the statement,
+   unique sort keys under a limit).
+7. **The clock and the parameters lower only when bound.** A `Now` with no clock pinned, and a parameter
+   the bindings do not hold, place the boundary; the step then refuses locally exactly as the reference
+   does (`UnpinnedClock`, `UnboundParam`). A slot bound to a cell of the wrong shape is `MayRefuse`.
+8. **The dialect seam is a record of functions** (`seam:Fuaran.DB.Provider.Dialect`): quote an identifier,
+   write a parameter marker, render a function (scalar functions, operators and aggregates, over rendered
+   arguments), render paging (an ordering with nulls last, then a count and an offset), map a column type,
+   and declare what it refuses (`Construct -> string option`, asked before each construct is emitted; a
+   refusal places the boundary). No dialect ships in this phase. *Reopen* the record's shape when the first
+   dialect finds a construct it cannot spell through it; it rides the draft until then.
+9. **The refusal union has a case per reason**, nineteen, and three of them refuse the pipeline whole
+   (an embedded source, an unmodelled source, a source with no columns); the rest place the boundary.
+   Each names the step and what the model or the bindings do hold, and `Refusal.describe` names the rule.
+10. **The placement laws are the validator** (`validator:Fuaran.DB.Provider.PlacementLaws`), on the shape of
+    the compute package's `plannerLaws`: over generated (model, pipeline, table) triples, the statement run by
+    an EXECUTOR the caller supplies, followed by the local suffix, equals the reference evaluator over the
+    pipeline as written, the same table on `Ok` and the same `EvalError` on `Error`; every statement is built
+    from the model and its parameters alone; the report accounts for every planned step; lowering is pure;
+    nothing throws. Sample adequacy demands every refusal (the dialect's own only when it refuses something
+    the sample draws), every lowered verb and join kind, every side of the split, a keyless aggregate over no
+    rows, a refusal from the reference and one from the statement. The executor is a function, so the laws
+    open no connection: the suite's reference dialect interprets the form in memory, with SQL's relational
+    meaning and the reference's scalar and aggregate semantics, and an engine-backed run is Phase 1901's
+    kit. The parity law was seen red over an engine that orders nulls first and over one that answers a
+    keyless aggregate over no rows, and the request-text law over a scan that named model names; those
+    falsifiers are permanent tests.
+
 ## 2026-10-11 — D3: the licence is Apache-2.0
 
 **Decided by the operator, 2026-10-11**, closing the licence half of D1.1 when Phase 1899 closed.

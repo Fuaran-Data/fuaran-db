@@ -1,5 +1,5 @@
-# Pack this repository's package, Fuaran.DB, into a local folder feed — by default the shared feed
-# three directories up from this repository, the layout it is developed in.
+# Pack this repository's packages, Fuaran.DB and Fuaran.DB.Provider, into a local folder feed — by
+# default the shared feed three directories up from this repository, the layout it is developed in.
 #
 #   pwsh ./pack.ps1                      pack at the version in Directory.Build.props
 #   pwsh ./pack.ps1 -Configuration Debug
@@ -38,8 +38,8 @@ Set-Location $PSScriptRoot
 $feed = if ($Feed) { $Feed } else { Join-Path $PSScriptRoot '..\..\..\local-nuget-feed' }
 if (-not (Test-Path $feed)) { New-Item -ItemType Directory -Force $feed | Out-Null }
 
-$packageIds = @('Fuaran.DB')
-$projects = @('src/Fuaran.DB/Fuaran.DB.fsproj')
+$packageIds = @('Fuaran.DB', 'Fuaran.DB.Provider')
+$projects = @('src/Fuaran.DB/Fuaran.DB.fsproj', 'src/Fuaran.DB.Provider/Fuaran.DB.Provider.fsproj')
 
 # The version this pack would write, read from the one file that declares it. Without it there is no
 # slot to check, so a props file that cannot be read stops the pack rather than disabling the guard.

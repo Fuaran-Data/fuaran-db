@@ -19,6 +19,8 @@
     <Compile Include="CorpusTests.fs" />
     <Compile Include="ConformanceTests.fs" />
     <Compile Include="BoundaryTests.fs" />
+    <Compile Include="ReferenceDialect.fs" />
+    <Compile Include="ProviderTests.fs" />
     <Compile Include="Main.fs" />
   </ItemGroup>
 
@@ -30,6 +32,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Fuaran.DB\Fuaran.DB.fsproj" />
+    <ProjectReference Include="..\..\src\Fuaran.DB.Provider\Fuaran.DB.Provider.fsproj" />
   </ItemGroup>
 
 </Project>

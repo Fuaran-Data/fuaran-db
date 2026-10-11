@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- An incomplete match is an error: the transform algebra is matched here with no catch-all, so
+         a verb, expression form, function or aggregate the algebra gains stops the build at every
+         arm that must decide whether it lowers. -->
+    <WarningsAsErrors>$(WarningsAsErrors);FS0025</WarningsAsErrors>
+    <WarnOn>3390;$(WarnOn)</WarnOn>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <PackageId>Fuaran.DB.Provider</PackageId>
+    <Description>Fuaran.DB.Provider — a pure function from a dataset model, a dialect, a transform pipeline and its bindings to one parameterised statement and the local suffix, or a named refusal: the fold split (the longest prefix the dialect lowers, computed over the compute planner's output and reported), the statement's abstract form, the dialect seam as a record of functions, and the placement laws. Opens no connection, reads no clock. FSharp.Core, Fuaran.Core, the compute packages and Fuaran.DB only.</Description>
+    <RepositoryUrl>https://github.com/Fuaran-Data/fuaran-db</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Statement.fs" />
+    <Compile Include="Dialect.fs" />
+    <Compile Include="Refusal.fs" />
+    <Compile Include="Lowering.fs" />
+    <Compile Include="FoldSplit.fs" />
+    <Compile Include="PlacementLaws.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Released versions, resolvable from the public feed alone (DECISIONS.md D2.10, D4). -->
+    <PackageReference Update="FSharp.Core" Version="10.1.300" />
+    <PackageReference Include="Fuaran.Core.Conformance" Version="0.36.0" />
+    <PackageReference Include="Fuaran.Compute.DataFrame" Version="0.38.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Fuaran.DB\Fuaran.DB.fsproj" />
+  </ItemGroup>
+
+</Project>

@@ -17,9 +17,15 @@ public feed, names one contract and is never repacked: a change after that point
   `ModelRejection`, `PipelineRefusal`, `WireError`, `TableDrift`, the reported-schema records, and the
   functions of `ModelNode`, `Model`, `ModelOps`, `Reads`, `ModelRules`, `PipelineCheck`, `Drift`,
   `ModelWire` and `AiTools`.
+- **The public F# surface of `Fuaran.DB.Provider`**: `Construct`, `Scalar`, `Output`, `Pick`,
+  `Relation`, `Parameter`, `Statement`, `Dialect`, `Refusal`, `Bindings`, `SplitReport`, `Lowered`,
+  `PlacementCase`, and the functions of `Relation`, `Statement`, `Render`, `Refusal`, `Bindings`,
+  `FoldSplit` and `PlacementLaws`. Every package in the repository is cut at the one version.
 - **The closed unions are closed on purpose.** A case added to `NodeKind`, `ModelOp`,
-  `ModelRejection`, `PipelineRefusal`, `WireError` or `TableDrift` breaks every exhaustive match a
-  consumer has written, so it is a breaking change, never an additive one, whatever it looks like.
+  `ModelRejection`, `PipelineRefusal`, `WireError`, `TableDrift`, `Construct`, `Scalar`, `Relation`,
+  `Pick` or `Refusal` breaks every exhaustive match a consumer has written, so it is a breaking change,
+  never an additive one, whatever it looks like. A function added to the `Dialect` record breaks every
+  dialect, for the same reason.
 - **A field added to a record** breaks every full-literal construction of it, and is breaking too.
 - **The wire format, version 1** (`ModelWire.Version`): the envelope, the `$type` tags, the field
   names, and canonical rendering. The corpus in `wire-fixtures/` is its executable statement; a change
@@ -30,6 +36,10 @@ public feed, names one contract and is never repacked: a change after that point
 - **What the check admits.** Making `PipelineCheck.check` or the model rules refuse something they
   admitted is breaking for a consumer whose pipelines passed; admitting something they refused is a
   change to the security posture and is recorded as a decision before it ships.
+- **What lowers, and the text it lowers to.** The declared subset (DECISIONS.md D4.4) and the shape of
+  the statement's form are a contract: lowering less moves work from the database to the host, and
+  lowering more is a claim of parity the placement laws must hold and a decision records first. A change
+  to the text a form renders to is classed with the form's own changes.
 
 ## Versions
 
@@ -38,3 +48,7 @@ public feed, names one contract and is never repacked: a change after that point
 The first surface (Phase 1899): the dataset model and its op vocabulary, the model rules, the pipeline
 check, seeding and drift, the wire codec with its corpus, and the AI-tools surface. Built against
 `Fuaran.Core.*` 0.36.0 and `Fuaran.Compute.DataFrame` 0.38.1.
+
+Additive, riding the draft (Phase 1900): the new package `Fuaran.DB.Provider` — the statement and its
+abstract form, the dialect seam, the refusal union, the fold split with `explain`, and the placement
+laws. No dialect ships with it. `Fuaran.DB`'s own surface is unchanged.
