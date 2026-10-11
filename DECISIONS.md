@@ -1,5 +1,14 @@
 # Fuaran.DB — decisions (newest first)
 
+## 2026-10-11 — D3: the licence is Apache-2.0
+
+**Decided by the operator, 2026-10-11**, closing the licence half of D1.1 when Phase 1899 closed.
+
+1. **Apache-2.0.** `LICENSE` and `NOTICE` are at the root, and every package carries
+   `PackageLicenseExpression` from `Directory.Build.props`, so a new package inherits it.
+2. **Visibility is unchanged.** The repository stays private; making it public, and publishing any package
+   beyond a local feed, are separate and deliberate acts.
+
 ## 2026-10-11 — D2: the dataset model (Phase 1899)
 
 The first package, `Fuaran.DB`: the domain's artefact as a typed tree, its ops, its validators, the check of a

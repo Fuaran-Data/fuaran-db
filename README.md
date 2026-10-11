@@ -36,3 +36,7 @@ Requires the .NET SDK pinned in [`global.json`](global.json).
 ./run.ps1      # restore tools, format, build, test
 ./verify.ps1   # the gate
 ```
+
+## Licence
+
+Apache-2.0. See [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).

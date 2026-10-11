@@ -3,5 +3,13 @@
     <!-- The one version every package in this repository is cut at, read by pack.ps1's same-version
          guard. STABILITY.md says whether the standing number is a draft slot or a released one. -->
     <Version>0.1.0</Version>
+    <Authors>Andrew J. Willshire</Authors>
+    <Company>Diametrical Ltd</Company>
+    <Copyright>Copyright 2026 Diametrical Ltd</Copyright>
+    <!-- Apache-2.0, decided 2026-10-11 (DECISIONS D3). The repository was written to a public standard
+         from its first commit so that choosing a licence would be a one-line act; this is that line. -->
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/Fuaran-Data/fuaran-db</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
   </PropertyGroup>
 </Project>
