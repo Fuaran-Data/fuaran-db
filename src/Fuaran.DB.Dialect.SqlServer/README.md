@@ -75,7 +75,7 @@ list are also outside the provider's own declared subset, which refuses them fir
 
 | Difference | How it is pinned | Fixture |
 |---|---|---|
-| Collation and case | Declared: strings compare, group and order under the column's collation. Under a case-insensitive one an answer may be the reference's over case-folded strings, and the kit accepts exactly that answer as differing as pinned. The kit's other fixtures keep strings distinct under any collation; trailing spaces, which T-SQL ignores in a comparison, are kept out of them too. | `difference-collation-case` |
+| Collation and case | Declared: strings compare, group and order under the column's collation. Under a case-insensitive one an answer may be the reference's over case-folded strings, and the kit accepts exactly that answer as differing as pinned. The kit's other fixtures keep strings distinct under any collation; trailing spaces, which T-SQL ignores in a comparison, are kept out of them too. | `difference-collation-case`, `difference-collation-order` |
 | Null ordering in `ORDER BY` | Spelled: every page key sorts nulls last explicitly. | `difference-null-ordering-asc`, `-desc` |
 | Integer division | Refused: `Div` and `Mod` run locally. | `difference-integer-division` |
 | Float summation order | Declared: a float `Sum` or `Mean` may add in the engine's order; the kit accepts the reference's answer under any order of the source rows. | `difference-float-summation-order` |
