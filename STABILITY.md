@@ -31,7 +31,8 @@ public feed, names one contract and is never repacked: a change after that point
   `RequestRecord`, `SessionState`, `SessionRejection`, `StatementIdentity`, `SessionReadFault`, `Execute`,
   `RunFailure`, `Session`, `Account`, `ReplayVerdict`, `Signer`, `SignedSession`, and the functions of
   `SessionOps`, `SessionHash`, `Recording`, `SessionWire`, `Session`, `Export` and `StreamLaws`.
-- **The public F# surface of `Fuaran.DB.Dialect.SqlServer`** (the `SqlServer` module) **and of
+- **The public F# surface of `Fuaran.DB.Dialect.SqlServer`** (the `SqlServer` module), **of
+  `Fuaran.DB.Dialect.PostgreSql`** (the `PostgreSql` module) **and of
   `Fuaran.DB.Conformance`** (`Pin`, `Fixture`, `HostFailure`, `Host`, `Verdict`, `FixtureReport`,
   `Report`, and the functions of `Fixtures` and `Kit`). `Pin` and `Verdict` are closed unions, closed on
   purpose, as above.
@@ -189,3 +190,24 @@ shape; every change is an addition, and the dependency set grows by one released
 - **Additive — a dependency**: `Fuaran.DB` now references the released `Fuaran.Core.Conformance` 0.36.0,
   which the provider and the session package already reference, for the laws' generator and adequacy
   guard.
+
+Riding the draft (Phase 1906), on the same terms: the second dialect. Three changes are BREAKING in shape
+and recorded as such; each would advance the version on a released slot.
+
+- **Breaking — the `Dialect` record gains `ReadValue: ColumnType -> string -> string`** (DECISIONS.md
+  D11.1), how a value of a type is read into the statement: the renderer applies it to every scanned column
+  and every parameter marker. Every dialect value must name it; identity keeps a dialect's text unchanged,
+  and the SQL Server dialect's text is unchanged.
+- **Breaking — `Render.text` changes signature**, from `Dialect -> Relation -> string` to
+  `Dialect -> ColumnType list -> Relation -> string`: the statement's parameter types, in ordinal order,
+  so each marker is read as its type. `FoldSplit` passes them; the statement's `Parameters` and their
+  `Marker` are unchanged.
+- **Breaking — `Pin` gains `CodePointOrder`** (D11.3), with its prediction in `Kit.predicted`. A closed
+  union gaining a case breaks every exhaustive match.
+- **Additive — the new package `Fuaran.DB.Dialect.PostgreSql`**: `PostgreSql.dialect`, its parts (`quote`,
+  `marker`, `collation`, `mapType`, `columnType`, `readValue`, `refuses`), and what a host needs to bind
+  and read (`parameterValue`, `decodeCell`, `createTable`, `dropTable`, `insertRow`). Its refusals and its
+  type map are part of its contract, on the SQL Server dialect's terms.
+- **Additive — the conformance set**: the seed gains the table `words` and the bindings `p_private_use`;
+  two fixtures, `difference-collation-order` and `difference-code-point-order`, take the set to 64. Every
+  existing fixture file, and every existing table's encoding in `seed.json`, keeps its bytes (D11.4).

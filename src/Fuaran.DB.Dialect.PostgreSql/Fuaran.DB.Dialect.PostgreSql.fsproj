@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- An incomplete match is an error: every function, operator and aggregate of the algebra is
+         matched with no catch-all, so a case the algebra gains stops the build until the dialect
+         decides whether it maps it or refuses it. -->
+    <WarningsAsErrors>$(WarningsAsErrors);FS0025</WarningsAsErrors>
+    <WarnOn>3390;$(WarnOn)</WarnOn>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <PackageId>Fuaran.DB.Dialect.PostgreSql</PackageId>
+    <Description>Fuaran.DB.Dialect.PostgreSql — the PostgreSQL dialect of the Fuaran.DB provider: double-quote quoting, positional parameter markers, LIMIT … OFFSET paging with nulls last, strings read under the C collation so they compare and order as the reference does, the type map in both directions, every function, operator and aggregate either mapped or refused by name, and the decoding of a result cell. Opens no connection and references no database driver.</Description>
+    <RepositoryUrl>https://github.com/Fuaran-Data/fuaran-db</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="PostgreSql.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Update="FSharp.Core" Version="10.1.300" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Fuaran.DB.Provider\Fuaran.DB.Provider.fsproj" />
+  </ItemGroup>
+
+</Project>

@@ -120,7 +120,7 @@ module FoldSplit =
             let form = built.Relation
 
             { Statement =
-                { Text = Render.text dialect form
+                { Text = Render.text dialect (built.Params |> List.map snd) form
                   Parameters =
                     built.Params
                     |> List.mapi (fun i (value, ty) ->

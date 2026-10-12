@@ -124,11 +124,42 @@ module Kit =
         | Null
         | Decimal _ -> c
 
-    let private lowerStrings (t: Table) : Table =
-        { t with
-            Columns =
-                t.Columns
-                |> List.map (fun col -> Column.create col.Name col.Type (col.Cells |> List.map foldCase)) }
+    /// A string re-encoded so that ordinal (code-unit) order is code-point order: U+E000 to U+FFFF
+    /// move below the surrogates, and the surrogates above them, each range keeping its own order.
+    let private codePointKey (c: Cell) : Cell =
+        match c with
+        | Str s ->
+            Str(
+                s
+                |> String.map (fun ch ->
+                    let u = int ch
+
+                    if u >= 0xD800 && u <= 0xDFFF then char (u + 0x2000)
+                    elif u >= 0xE000 then char (u - 0x800)
+                    else ch)
+            )
+        | Int _
+        | Float _
+        | Bool _
+        | Date _
+        | Timestamp _
+        | Null
+        | Decimal _ -> c
+
+    /// The reference over a fixture with every cell of the seed and the bindings passed through `f`.
+    let private referenceOver (f: Cell -> Cell) (fixture: Fixture) : Result<Table, EvalError> =
+        let table (t: Table) =
+            { t with
+                Columns =
+                    t.Columns
+                    |> List.map (fun col -> Column.create col.Name col.Type (col.Cells |> List.map f)) }
+
+        let bindings =
+            { fixture.Bindings with
+                Params = fixture.Bindings.Params |> Map.map (fun _ c -> f c)
+                Lists = fixture.Bindings.Lists |> Map.map (fun _ cs -> List.map f cs) }
+
+        PlacementLaws.reference (case (Fixtures.tables |> Map.map (fun _ t -> table t)) bindings fixture)
 
     let rec private permutations (xs: 'a list) : 'a list list =
         match xs with
@@ -143,13 +174,8 @@ module Kit =
     /// The answers a pin predicts for a fixture.
     let predicted (pin: Pin) (f: Fixture) : Result<Table, EvalError> list =
         match pin with
-        | Pin.CaseInsensitiveCollation ->
-            let bindings =
-                { f.Bindings with
-                    Params = f.Bindings.Params |> Map.map (fun _ c -> foldCase c)
-                    Lists = f.Bindings.Lists |> Map.map (fun _ cs -> List.map foldCase cs) }
-
-            [ PlacementLaws.reference (case (Fixtures.tables |> Map.map (fun _ t -> lowerStrings t)) bindings f) ]
+        | Pin.CaseInsensitiveCollation -> [ referenceOver foldCase f ]
+        | Pin.CodePointOrder -> [ referenceOver codePointKey f ]
         | Pin.FloatSummationOrder ->
             match Map.tryFind f.Source Fixtures.tables with
             | Some source when Table.rowCount source <= 7 ->

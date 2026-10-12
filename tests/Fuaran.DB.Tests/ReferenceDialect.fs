@@ -53,6 +53,7 @@ let dialect: Dialect =
     { Name = "reference"
       QuoteIdentifier = quote
       ParameterMarker = fun i -> "@p" + string i
+      ReadValue = fun _ value -> value
       RenderFunction = render
       RenderAggregate = fun fn _ a -> render (Construct.Aggregate fn) [ a ]
       ValueAsCondition = id

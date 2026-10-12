@@ -282,6 +282,9 @@ module SqlServer =
         { Name = "sqlserver"
           QuoteIdentifier = quote
           ParameterMarker = marker
+          // A value is read as the source declares it: strings compare under the column's collation,
+          // which is the difference `CaseInsensitiveCollation` pins.
+          ReadValue = fun _ value -> value
           RenderFunction = render
           RenderAggregate = aggregate
           // T-SQL has no boolean type: a bit is a value, and a condition is not one.

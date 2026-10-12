@@ -1,5 +1,119 @@
 # Fuaran.DB — decisions (newest first)
 
+## 2026-10-12 — D11: PostgreSQL, the second dialect (Phase 1906)
+
+`Fuaran.DB.Dialect.PostgreSql` is the second dialect. Its purpose is to find what the first left in the
+provider. Six rulings, each with what would reopen it.
+
+1. **One assumption moved behind the seam: a value entered the statement as the source declares it.** The
+   renderer wrote a scanned column as its bare quoted identifier and a parameter as its bare marker. So the
+   engine compared, grouped and ordered every string under the column's own collation, or under the
+   database default for a parameter. SQL Server's `CaseInsensitiveCollation` pin absorbed this, so it did
+   not show. PostgreSQL's default collation is linguistic: it puts `a` before `B` where the reference
+   (ordinal, probed) puts `B` first. Pinning that would mean predicting every locale's order. So the
+   dialect re-declares the order instead. The `Dialect` record gains `ReadValue: ColumnType -> string ->
+   string`, which the renderer applies to every scanned column and every parameter marker. To type the
+   markers, `Render.text` gains the statement's parameter types. Both changes are breaking on the 0.1.0
+   draft (STABILITY.md). SQL Server and the reference dialect implement `ReadValue` as identity, so their
+   text is unchanged. PostgreSQL reads a string `COLLATE "C"`. Exposed by `difference-collation-order`
+   (the first three names: `1, 3, 5` by code unit; `1, 2, 3` under a case-insensitive or linguistic
+   order). `difference-code-point-order` exposes it too.
+   **Considered and kept in the core, each with why:**
+   - The relational spellings the renderer writes are the same in both engines. These are the derived
+     tables with `AS`, the four join keywords, `EXISTS` and `NOT EXISTS` for the filtering joins,
+     `COALESCE`, `CASE`, `IN`, `IS NULL`, `NOT`, and `HAVING COUNT(*) > 0`.
+   - Paging, booleans and typed aggregates are already the dialect's (D8.1). PostgreSQL uses its native
+     `NULLS LAST`, identity conversions, `bool_and` and `bool_or`, and `avg` over a double.
+   - The provider clamps a page's count and offset at zero. That is the reference's own semantics, not
+     T-SQL's, and PostgreSQL, which refuses a negative `LIMIT`, needs the clamp too.
+   - A marker may repeat in the text. PostgreSQL's positional markers may too.
+   - `RenderFunction` stays untyped. `Derive` does not lower, so a scalar's result type never reaches a
+     result column, only a comparison. A comparison of an `int` with a `float` answers the same in both
+     engines, and `floor` and `round` over an integer answer a double in PostgreSQL as they answer a float
+     in the reference. *Reopen* when `Derive` lowers.
+   - The probe's `COUNT(*)` and `MAX`. A probe compares readings of one engine with each other, never with
+     the reference, so the order its maximum is taken under only needs to be stable.
+   - PostgreSQL truncates a quoted identifier past 63 bytes, both where an object is created and where it
+     is named. A model's physical identifier therefore names the object the engine holds, and a minted
+     alias is short.
+
+   The provider's lowering core (`Statement.fs`, `Dialect.fs`, `Lowering.fs`, `FoldSplit.fs`, `Probe.fs`)
+   writes no literal that only a dialect may write. A source-reading test in the suite holds this, and it
+   was made to fail once, on an injected `" OFFSET"`, before it was trusted. *Reopen* when a third
+   dialect finds a value it must read differently by something other than its type.
+2. **What PostgreSQL lowers, and what it refuses.** Every function, operator and aggregate is matched with
+   no catch-all.
+   - **Mapped as SQL Server maps them:** `Abs`, `Floor`, `Ceil`, `Sqrt` (null for a negative argument),
+     `Trim` (the reference's four characters, spelled with `chr`), the arithmetic, comparison and logical
+     operators, `Count`, `CountDistinct`, `Sum`, `Mean`, `Min` and `Max`.
+   - **`Round`** is spelled `sign(x) * floor(abs(x) + 0.5)`. This is the reference's own formula, probed:
+     `0.49999999999999994` rounds to 1 there, which is not .NET's away-from-zero rounding, and
+     PostgreSQL's `round` rounds a double half to even. A test pins the premise against the reference.
+   - **Mapped here and refused by SQL Server:** `Replace`, `Contains`, `StartsWith` and `EndsWith`.
+     PostgreSQL's `replace`, `strpos`, `starts_with` and `right`/`length` match literally and
+     case-sensitively, with no wildcard. Probed against the reference: an empty search, case, `%`, nulls,
+     and an astral suffix.
+   - **Refused:** `Lower` and `Upper` (case folding by the collation's character classes, which under `C`
+     reach ASCII only). `Length`, `Substr` and `IndexOf` (they count code points, where the reference
+     counts UTF-16 code units; probed: an emoji has length 2). `DatePart` and `DateDiffDays`. `Concat`.
+     `Least` and `Greatest` (a null is skipped). `Div` and `Mod`. `Median` and `StdDev` (not measured).
+     `First` and `Last`. `Cast`. The exact roundings. The empty list.
+   - **The change counter is `None`.** The write-ahead log position moves for every database in the
+     cluster and misses an unlogged table.
+
+   *Reopen* a mapping on the first unexpected difference an armed run reports.
+3. **The differences, and where the two dialects part.**
+   - **Collation and case** are *spelled* here (`COLLATE "C"`), and the armed leg requires that no fixture
+     differ as `CaseInsensitiveCollation` predicts. SQL Server *declares* them. The two dialects part on
+     `difference-collation-case` and `difference-collation-order`. Both fixtures declare the pin, so the
+     difference is pinned on both: SQL Server shows it, and PostgreSQL agrees.
+   - **Code point order** is *declared* by a new pin, `CodePointOrder`. Under `C`, PostgreSQL orders
+     strings by code point, and the reference orders them by UTF-16 code unit. The two part only where an
+     astral character meets one in U+E000 to U+FFFF. The pin predicts the reference over seed and bindings
+     re-encoded so that code-unit order is code-point order. Fixture: `difference-code-point-order` (3 by
+     code unit, 2 by code point). SQL Server agreed on it (ruling 6). PostgreSQL is predicted to differ as
+     pinned, which no run has measured.
+   - **Null ordering** is *spelled*. **Integer division**, **decimal scale on division** and **date
+     truncation** are *refused*. **Float summation order** is *declared*. **A pushed sum's width** is
+     *decoded*: PostgreSQL's `sum` and `count` answer a `bigint`, and `decodeCell` narrows it, refusing a
+     sum past int32 with the reference's refusal. These use the existing fixtures.
+   - The four constructs ruling 2 maps here and SQL Server refuses keep their `reach-*` fixtures in the
+     refusal set, not the subset. PostgreSQL lowers them there, so its agreement on them is checked
+     wherever the kit runs, and the subset a dialect is certified on does not widen.
+4. **The kit's seed gains a table, and the kit version does not advance.** The seed gains `words`
+   (physical `CK_WORD`), and the bindings gain `p_private_use`, for the code-point fixture. `seed.json`
+   changes for the new table, and `manifest.json` changes for the two new ids (64 fixtures). Every existing
+   fixture file is byte-identical, and so is each existing table's encoding inside `seed.json`. A host
+   that loads the new seed gains a table no earlier fixture reads. The set is additive, and the 0.1.0 slot
+   is an untagged draft, so the kit's stamp, which is the assembly version, rides it. A released kit would
+   take a new version for the same change. *Reopen* if a seed change ever alters an existing table.
+5. **The PostgreSQL leg is armed by configuration and Pending without it.** With `FUARAN_DB_POSTGRESQL`
+   set to a connection string, the suite does the following:
+   - It creates a database (`TEMPLATE template0`, UTF-8), seeds it, runs the kit, fails on any unexpected
+     difference or any case-insensitive verdict, and drops the database (`WITH (FORCE)`).
+   - It runs the falsifier: a dialect that reads strings bare, over a database created under the ICU root
+     locale. That run must go red.
+
+   Requirements: PostgreSQL 11 for `starts_with`, 13 for the forced drop, and 15 for the falsifier's ICU
+   database. **No PostgreSQL run has been made.** This machine has no PostgreSQL and no container runtime,
+   and the phase's engine task is deferred to an operator decision:
+   - **A:** install PostgreSQL, or run it in a container elsewhere, set `FUARAN_DB_POSTGRESQL`, and record
+     the run here.
+   - **B:** accept the in-memory run as the dialect's evidence until a host certifies it.
+
+   The in-memory run lowers all 64 fixtures through this dialect. It proves where each boundary falls and
+   that the statement's form, evaluated with the reference's semantics, agrees (64 of 64). It never
+   executes PostgreSQL's text. So it proves nothing of the spelling, the type map, the decoding, or any
+   semantic ruling 2 claims for the engine.
+6. **The first dialect's recorded run, repeated after the seam change.** SQL Server 2025 LocalDB,
+   17.0.4025.3 (Express Edition, 64-bit), collation `SQL_Latin1_General_CP1_CI_AS`.
+   - **Before**, on `0f8ffbe`: 62 fixtures. 61 agreed, 1 differing as pinned, 0 differing unexpectedly.
+   - **After**: 64 fixtures. 62 agreed, 2 differing as pinned, 0 differing unexpectedly.
+     `difference-collation-case` and the new `difference-collation-order` differ as pinned
+     (`CaseInsensitiveCollation`), and the new `difference-code-point-order` agreed.
+
+   The falsifier went red as required both times.
+
 ## 2026-10-12 — D10: the model projected per peer (Phase 1907)
 
 In the custodian topology the provider, the model and the policy run on the far side of a peer call. The

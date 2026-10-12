@@ -17,6 +17,12 @@ type Pin =
     /// A float sum or mean added up in the engine's order. Predicts the reference over every
     /// permutation of the source table's rows (a source of at most seven rows).
     | FloatSummationOrder
+    /// Strings compared and ordered by Unicode code point, where the reference compares UTF-16 code
+    /// units: the two part only where a character beyond the Basic Multilingual Plane meets one in
+    /// U+E000 to U+FFFF. Predicts the reference over the fixture with every string of the seed and the
+    /// bindings re-encoded so that code-unit order is code-point order (DECISIONS.md D11.3); a fixture
+    /// declaring it answers no string, since the re-encoded strings are not the engine's.
+    | CodePointOrder
 
 /// One fixture: a pipeline over a table of the seed, what it is evaluated under, and what it is there
 /// to show.
@@ -65,7 +71,7 @@ module Fixtures =
     /// The seed's row ceiling, and the bound every fixture that does not end in a page ends with.
     let ceiling = 100
 
-    /// The seed schema: four tables whose physical identifiers differ from their model names, one
+    /// The seed schema: five tables whose physical identifiers differ from their model names, one
     /// column of every type the columnar model has, one physical identifier carrying a closing
     /// bracket, one declared relation, and a limit that admits every fixture.
     let model: ModelNode =
@@ -114,7 +120,13 @@ module Fixtures =
                         "readings"
                         "CK_READING"
                         [ column "c:r:id" "id" "RD_ID" IntType
-                          column "c:r:w" "w" "RD_VALUE" FloatType ] ] }
+                          column "c:r:w" "w" "RD_VALUE" FloatType ]
+                    table
+                        "t:words"
+                        "words"
+                        "CK_WORD"
+                        [ column "c:w:id" "id" "WD_ID" IntType
+                          column "c:w:text" "text" "WD_TEXT" StringType ] ] }
               { Id = "j:order-customer"
                 Kind =
                   NodeKind.Join
@@ -263,11 +275,23 @@ module Fixtures =
                   [ Int 3; Float -1e16 ]
                   [ Int 4; Float 1.0 ] ]
 
+        // A private-use character of the Basic Multilingual Plane, a character beyond it, and two ASCII
+        // letters of different case: ordered by code unit, by code point and under a linguistic
+        // collation, the four fall in three different orders (DECISIONS.md D11.3).
+        let words =
+            tableOf
+                [ "id", IntType; "text", StringType ]
+                [ [ Int 1; Str "" ]
+                  [ Int 2; Str "\U0001F600" ]
+                  [ Int 3; Str "a" ]
+                  [ Int 4; Str "B" ] ]
+
         Map.ofList
             [ "orders", orders
               "customers", customers
               "points", points
-              "readings", readings ]
+              "readings", readings
+              "words", words ]
 
     /// The seed as an executor reads it: keyed and named by physical identifier.
     let physical: Map<string, Table> = PlacementLaws.physicalTables model tables
@@ -275,7 +299,7 @@ module Fixtures =
     /// The bindings every fixture is evaluated under: one scalar parameter per use, one list, and the
     /// clock pinned at 2026-06-02.
     let bindings: Bindings =
-        { Params = Map.ofList [ "p_channel", Str "web"; "p_name", Str "ann" ]
+        { Params = Map.ofList [ "p_channel", Str "web"; "p_name", Str "ann"; "p_private_use", Str "" ]
           Lists = Map.ofList [ "p_channels", [ Str "web"; Str "phone" ] ]
           Clock = Some PlacementLaws.clock }
 
@@ -501,7 +525,22 @@ module Fixtures =
                 "date truncation: the month read from a timestamp"
                 "orders"
                 (filter (eq (fn DatePart [ str "month"; Col "at" ]) (int 6))) with
-              Reaches = Some(Construct.Function DatePart) } ]
+              Reaches = Some(Construct.Function DatePart) }
+          { fixture
+                "difference-collation-order"
+                "collation and order: the first three names in order, their ids kept"
+                "customers"
+                [ Sort [ Slot.Lit "name", Asc ]
+                  Limit(Slot.Lit 3, Slot.Lit 0)
+                  Project [ "id", "id" ] ] with
+              Pins = [ Pin.CaseInsensitiveCollation ] }
+          { fixture
+                "difference-code-point-order"
+                "code point order: strings below a private-use character, counted"
+                "words"
+                [ Filter(Binary(Lt, Col "text", Param "p_private_use"))
+                  GroupBy([], [ agg "n" Count "id" ]) ] with
+              Pins = [ Pin.CodePointOrder ] } ]
 
     /// One fixture per function, operator and aggregate a dialect may refuse, each reaching it where
     /// the reference evaluates it without refusing.

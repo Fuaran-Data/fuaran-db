@@ -38,8 +38,8 @@ Set-Location $PSScriptRoot
 $feed = if ($Feed) { $Feed } else { Join-Path $PSScriptRoot '..\..\..\local-nuget-feed' }
 if (-not (Test-Path $feed)) { New-Item -ItemType Directory -Force $feed | Out-Null }
 
-$packageIds = @('Fuaran.DB', 'Fuaran.DB.Provider', 'Fuaran.DB.Dialect.SqlServer', 'Fuaran.DB.Conformance', 'Fuaran.DB.Session')
-$projects = @('src/Fuaran.DB/Fuaran.DB.fsproj', 'src/Fuaran.DB.Provider/Fuaran.DB.Provider.fsproj', 'src/Fuaran.DB.Dialect.SqlServer/Fuaran.DB.Dialect.SqlServer.fsproj', 'src/Fuaran.DB.Conformance/Fuaran.DB.Conformance.fsproj', 'src/Fuaran.DB.Session/Fuaran.DB.Session.fsproj')
+$packageIds = @('Fuaran.DB', 'Fuaran.DB.Provider', 'Fuaran.DB.Dialect.SqlServer', 'Fuaran.DB.Conformance', 'Fuaran.DB.Session', 'Fuaran.DB.Dialect.PostgreSql')
+$projects = @('src/Fuaran.DB/Fuaran.DB.fsproj', 'src/Fuaran.DB.Provider/Fuaran.DB.Provider.fsproj', 'src/Fuaran.DB.Dialect.SqlServer/Fuaran.DB.Dialect.SqlServer.fsproj', 'src/Fuaran.DB.Conformance/Fuaran.DB.Conformance.fsproj', 'src/Fuaran.DB.Session/Fuaran.DB.Session.fsproj', 'src/Fuaran.DB.Dialect.PostgreSql/Fuaran.DB.Dialect.PostgreSql.fsproj')
 
 # The version this pack would write, read from the one file that declares it. Without it there is no
 # slot to check, so a props file that cannot be read stops the pack rather than disabling the guard.

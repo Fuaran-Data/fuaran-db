@@ -21,6 +21,12 @@ type Dialect =
         QuoteIdentifier: string -> string
         /// The marker for the parameter at this 0-based ordinal.
         ParameterMarker: int -> string
+        /// A value of this type entering the statement — a scanned column, or a parameter marker — as
+        /// the engine must read it to compare, group and order it as the reference does: identity
+        /// where it already does. A dialect whose engine compares strings by a declared collation
+        /// re-declares it here, so the comparison the statement makes is the reference's and not the
+        /// source's (DECISIONS.md D11).
+        ReadValue: ColumnType -> string -> string
         /// Render a scalar function or an operator over its already-rendered arguments. Called only
         /// for a construct `Refuses` admitted. A logical operator's arguments arrive as conditions,
         /// every other argument as a value.
@@ -65,8 +71,9 @@ module Render =
         | Semi
         | Anti -> "INNER JOIN"
 
-    /// The text of one relation. `next` mints the derived-table aliases (`t1`, `t2`, …).
-    let rec private relation (d: Dialect) (next: unit -> string) (r: Relation) : string =
+    /// The text of one relation. `next` mints the derived-table aliases (`t1`, `t2`, …); `marker`
+    /// spells the parameter at an ordinal, read as its type.
+    let rec private relation (d: Dialect) (marker: int -> string) (next: unit -> string) (r: Relation) : string =
         let q = d.QuoteIdentifier
 
         // A scalar is rendered in one of two positions: as a CONDITION (a `WHERE`, a `CASE` branch's
@@ -118,7 +125,7 @@ module Render =
         and valueForm (s: Scalar) : string =
             match s with
             | Scalar.Column a -> q a
-            | Scalar.Parameter i -> d.ParameterMarker i
+            | Scalar.Parameter i -> marker i
             | Scalar.Function(f, args) -> d.RenderFunction (Construct.Function f) (args |> List.map value)
             | Scalar.Operator(op, a, b) -> d.RenderFunction (Construct.Operator op) [ value a; value b ]
             | Scalar.Coalesce xs -> "COALESCE(" + (xs |> List.map value |> String.concat ", ") + ")"
@@ -139,13 +146,13 @@ module Render =
 
         let from (input: Relation) =
             let alias = next ()
-            "(" + relation d next input + ") AS " + q alias, alias
+            "(" + relation d marker next input + ") AS " + q alias, alias
 
         match r with
         | Relation.Scan(table, columns) ->
             "SELECT "
             + (columns
-               |> List.map (fun (p, o) -> q p + " AS " + q o.Alias)
+               |> List.map (fun (p, o) -> d.ReadValue o.Type (q p) + " AS " + q o.Alias)
                |> String.concat ", ")
             + " FROM "
             + q table
@@ -234,18 +241,26 @@ module Render =
             + " FROM "
             + src
             + " "
-            + d.RenderPaging
-                (keys |> List.map (fun (a, dir) -> q a, dir))
-                (d.ParameterMarker limit)
-                (d.ParameterMarker offset)
+            + d.RenderPaging (keys |> List.map (fun (a, dir) -> q a, dir)) (marker limit) (marker offset)
 
-    /// The statement text of a form, through a dialect. Pure: the same form and dialect render the
-    /// same text.
-    let text (d: Dialect) (form: Relation) : string =
+    /// The statement text of a form, through a dialect, its parameters typed by `parameterTypes` in
+    /// ordinal order: each marker is read as its parameter's type (`ReadValue`). Pure: the same form,
+    /// types and dialect render the same text.
+    let text (d: Dialect) (parameterTypes: ColumnType list) (form: Relation) : string =
         let n = ref 0
 
         let next () =
             n.Value <- n.Value + 1
             "t" + string n.Value
 
-        relation d next form
+        let types = Array.ofList parameterTypes
+
+        let marker (i: int) =
+            let m = d.ParameterMarker i
+
+            if i >= 0 && i < types.Length then
+                d.ReadValue types[i] m
+            else
+                m
+
+        relation d marker next form

@@ -37,8 +37,12 @@ exact or heuristic and what it can miss; the provider writes each dialect's prob
 lowers the longest reducing prefix to one parameterised statement and runs the rest locally, the named
 refusals that set where the split falls, and the placement laws a dialect is certified against.
 `Fuaran.DB.Dialect.SqlServer` is the first dialect, T-SQL, its refusals and pinned differences named in
-[its README](src/Fuaran.DB.Dialect.SqlServer/README.md), and `Fuaran.DB.Conformance` is the kit a dialect is
-certified with: a seed, stated fixtures with the reference's answers (emitted to [`conformance/`](conformance/)),
+[its README](src/Fuaran.DB.Dialect.SqlServer/README.md). `Fuaran.DB.Dialect.PostgreSql` is the second,
+written to find what the first left in the provider; it reads every string under the `C` collation through
+the seam that moved for it, and [its README](src/Fuaran.DB.Dialect.PostgreSql/README.md) names its refusals and pins. It has been certified over the
+in-memory interpreter only: no PostgreSQL engine run is recorded yet, and the suite arms that leg when
+`FUARAN_DB_POSTGRESQL` holds a connection string. `Fuaran.DB.Conformance` is the kit a
+dialect is certified with: a seed, stated fixtures with the reference's answers (emitted to [`conformance/`](conformance/)),
 and a runner over the host's executor.
 `Fuaran.DB.Session` is the connection record. It holds what passed over a connection as a hash-chained
 op-stream: the schema each source reported, each pipeline and its policy verdict, the fingerprint guarding

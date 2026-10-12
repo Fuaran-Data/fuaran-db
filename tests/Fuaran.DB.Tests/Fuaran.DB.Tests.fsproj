@@ -26,6 +26,7 @@
     <Compile Include="FingerprintTests.fs" />
     <Compile Include="SubstraitSurveyTests.fs" />
     <Compile Include="SqlServerTests.fs" />
+    <Compile Include="PostgreSqlTests.fs" />
     <Compile Include="SessionTests.fs" />
     <Compile Include="Main.fs" />
   </ItemGroup>
@@ -36,6 +37,8 @@
     <PackageReference Include="Fuaran.Core.Conformance" Version="0.36.0" />
     <!-- The engine-backed conformance leg's host only (Phase 1901); no package of this repository references a driver. -->
     <PackageReference Include="Microsoft.Data.SqlClient" Version="7.0.2" />
+    <!-- The PostgreSQL engine-backed leg's host only (Phase 1906), as above. -->
+    <PackageReference Include="Npgsql" Version="10.0.3" />
   </ItemGroup>
 
   <ItemGroup>
@@ -44,6 +47,7 @@
     <ProjectReference Include="..\..\src\Fuaran.DB.Dialect.SqlServer\Fuaran.DB.Dialect.SqlServer.fsproj" />
     <ProjectReference Include="..\..\src\Fuaran.DB.Conformance\Fuaran.DB.Conformance.fsproj" />
     <ProjectReference Include="..\..\src\Fuaran.DB.Session\Fuaran.DB.Session.fsproj" />
+    <ProjectReference Include="..\..\src\Fuaran.DB.Dialect.PostgreSql\Fuaran.DB.Dialect.PostgreSql.fsproj" />
   </ItemGroup>
 
 </Project>

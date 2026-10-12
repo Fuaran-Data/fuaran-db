@@ -23,11 +23,11 @@ open Fuaran.DB.Conformance
 /// suite may create and drop a database on.
 let serverVariable = "FUARAN_DB_SQLSERVER"
 
-let private repoRoot () =
+let repoRoot () =
     Path.GetDirectoryName(CorpusTests.fixturesDir ())
 
 /// The in-memory interpreter of a statement's form, as a host: the seed is held, not loaded.
-let private memoryHost: Host =
+let memoryHost: Host =
     { Seed = fun _ -> Ok()
       Execute =
         fun statement ->
@@ -41,7 +41,7 @@ let private unionCases<'T> () : 'T list =
     |> List.ofArray
 
 /// Every function, operator and aggregate of the algebra, and the excluded constructs.
-let private constructs: Construct list =
+let constructs: Construct list =
     (unionCases<ScalarFn> () |> List.map Construct.Function)
     @ (unionCases<BinOp> () |> List.map Construct.Operator)
     @ (unionCases<AggFn> () |> List.map Construct.Aggregate)
@@ -50,7 +50,7 @@ let private constructs: Construct list =
         Construct.EmptyList ]
 
 /// Where the boundary falls for a fixture through a dialect.
-let private boundaryOf (dialect: Dialect) (f: Fixture) : Refusal option =
+let boundaryOf (dialect: Dialect) (f: Fixture) : Refusal option =
     match Policy.admit Fixtures.model Kit.subject (Ref f.Source) f.Pipeline with
     | Error r -> failtestf "%s: the policy refused it: %A" f.Id r
     | Ok admitted ->
@@ -58,7 +58,7 @@ let private boundaryOf (dialect: Dialect) (f: Fixture) : Refusal option =
         | Error r -> failtestf "%s: no statement: %A" f.Id r
         | Ok split -> split.Boundary
 
-let private textOf (dialect: Dialect) (id: string) : string =
+let textOf (dialect: Dialect) (id: string) : string =
     let f = Fixtures.all |> List.find (fun f -> f.Id = id)
 
     match Policy.admit Fixtures.model Kit.subject (Ref f.Source) f.Pipeline with
@@ -460,7 +460,10 @@ let tests =
 
           testCase "the dialect and the kit reference no database driver"
           <| fun _ ->
-              for project in [ "Fuaran.DB.Dialect.SqlServer"; "Fuaran.DB.Conformance" ] do
+              for project in
+                  [ "Fuaran.DB.Dialect.SqlServer"
+                    "Fuaran.DB.Dialect.PostgreSql"
+                    "Fuaran.DB.Conformance" ] do
                   let text =
                       File.ReadAllText(Path.Combine(repoRoot (), "src", project, project + ".fsproj"))
 
