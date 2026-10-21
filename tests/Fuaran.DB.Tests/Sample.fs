@@ -7,13 +7,21 @@ open Fuaran.DB
 
 let col (id: string) (name: string) (ty: ColumnType) (cls: string) : ModelNode =
     { Id = id
-      Kind =
-        NodeKind.Column
-            { Name = name
-              Physical = name.ToUpperInvariant()
-              Type = ty
-              Classification = cls }
+      Kind = NodeKind.Column(ColumnSpec.create name (name.ToUpperInvariant()) ty cls)
       Children = [] }
+
+/// A schema of `(name, type)` entries stating no metadata.
+let fields (entries: (string * ColumnType) list) : Schema =
+    entries |> List.map (fun (n, ty) -> Field.create n ty)
+
+/// A column of `cells`; a cell its type cannot hold fails the test that built it.
+let column (name: string) (ty: ColumnType) (cells: Cell list) : Column =
+    match Column.ofCells name ty cells with
+    | Ok c -> c
+    | Error e -> failwithf "%s: %s" name (ColumnCodec.errorString e)
+
+/// A column's cells, in row order.
+let cells (c: Column) : Cell list = Column.toCells c
 
 let table (id: string) (name: string) (children: ModelNode list) : ModelNode =
     { Id = id

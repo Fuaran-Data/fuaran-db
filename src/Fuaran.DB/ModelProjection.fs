@@ -51,6 +51,10 @@ type ProjectionChange =
     | ColumnRemoved of table: string * column: string * ty: ColumnType
     /// A column both hold changed type; safe when `ColumnType.widens from into`.
     | ColumnRetyped of table: string * column: string * from: ColumnType * into: ColumnType
+    /// A column both hold changed a metadata member — its unit, label, description or an extension
+    /// member — as Core's `SchemaDelta.Amended` reports it (Phase 2). A unit change is breaking: a
+    /// pipeline the pin admitted can be refused by the evaluator's unit check under the new unit.
+    | ColumnAmended of table: string * column: string * change: FieldChange
     /// A relation, by name, ends and key names, that only the fresh projection declares.
     | RelationAdded of name: string
     /// A relation, by name, ends and key names, that only the pin declares.
@@ -422,10 +426,16 @@ module ModelProjection =
         | ProjectionChange.RelationRemoved _
         | ProjectionChange.MeasureRemoved _ -> true
         | ProjectionChange.ColumnRetyped(_, _, from, into) -> not (ColumnType.widens from into)
+        | ProjectionChange.ColumnAmended(_, _, change) ->
+            match change with
+            | FieldChange.Unit _ -> true
+            | FieldChange.Label _
+            | FieldChange.Description _
+            | FieldChange.Ext _ -> false
         | ProjectionChange.GrantChanged(_, from, into) -> rank into < rank from
 
     /// The drift verdict of a fresh projection against a pinned one, in the names a pipeline reads:
-    /// columns added, removed and retyped per table (`Schema.diff`; a rename is a removal and an
+    /// columns added, removed, retyped and amended per table (`Schema.diff`; a rename is a removal and an
     /// addition, and an order change is none), relations and measures added and removed, and grant
     /// levels changed. `Breaking` is the changes `isBreaking` holds.
     let drift (pinned: ProjectedModel) (fresh: ProjectedModel) : ProjectionDrift =
@@ -449,10 +459,13 @@ module ModelProjection =
             |> List.collect (fun t ->
                 let d = Schema.diff (schemaIn before t) (schemaIn after t)
 
-                (d.Removed |> List.map (fun (c, ty) -> ProjectionChange.ColumnRemoved(t, c, ty)))
+                (d.Removed
+                 |> List.map (fun f -> ProjectionChange.ColumnRemoved(t, f.Name, f.Type)))
                 @ (d.Retyped
                    |> List.map (fun (c, from, into) -> ProjectionChange.ColumnRetyped(t, c, from, into)))
-                @ (d.Added |> List.map (fun (c, ty) -> ProjectionChange.ColumnAdded(t, c, ty))))
+                @ (d.Amended
+                   |> List.map (fun (c, change) -> ProjectionChange.ColumnAmended(t, c, change)))
+                @ (d.Added |> List.map (fun f -> ProjectionChange.ColumnAdded(t, f.Name, f.Type))))
 
         let grants =
             (pinned.Grants @ fresh.Grants)
@@ -515,11 +528,7 @@ module ModelProjection =
         let private column (table: string) (i: int) (name: string) (ty: ColumnType) (cls: string) : ModelNode =
             leaf
                 ("c:" + table + "." + name)
-                (NodeKind.Column
-                    { Name = name
-                      Physical = sprintf "PHYS_%s_%d" (name.ToUpperInvariant()) i
-                      Type = ty
-                      Classification = cls })
+                (NodeKind.Column(ColumnSpec.create name (sprintf "PHYS_%s_%d" (name.ToUpperInvariant()) i) ty cls))
 
         let private draw (r0: ConfRng.T) : Case * ConfRng.T =
             let r = ref r0

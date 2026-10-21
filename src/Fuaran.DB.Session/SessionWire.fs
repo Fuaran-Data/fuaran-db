@@ -58,6 +58,11 @@ module SessionWire =
     let private typedPair (name: string, ty: ColumnType) =
         JObj [ "name", JStr name; "type", JStr(ColumnType.tag ty) ]
 
+    /// A reported field as Core's field document (`ColumnCodec.fieldJson`): its name and type, and
+    /// the unit, label, description and extension members only when stated, so a field stating none
+    /// is the `typedPair` it was before fields carried metadata.
+    let private fieldJson (f: Field) = ColumnCodec.fieldJson f
+
     let private columnRefJson (c: ColumnRef) =
         JObj
             [ "table", JStr c.Table
@@ -150,7 +155,7 @@ module SessionWire =
     let private schemaJson (s: ReportedSchema) : JVal =
         JArr(
             s.Tables
-            |> List.map (fun t -> JObj [ "name", JStr t.Name; "columns", JArr(t.Columns |> List.map typedPair) ])
+            |> List.map (fun t -> JObj [ "name", JStr t.Name; "columns", JArr(t.Columns |> List.map fieldJson) ])
         )
 
     let private driftJson (d: TableDrift) : JVal =
@@ -366,7 +371,7 @@ module SessionWire =
                       BoolType
                       StringType
                       DateType
-                      TimestampType
+                      (TimestampType TimeUnit.Seconds)
                       DecimalType ]
                     |> List.map ColumnType.tag
                 )
@@ -380,6 +385,21 @@ module SessionWire =
             let! tag = str path "type" fs
             let! ty = columnTypeOf (path + ".type") tag
             return name, ty
+        }
+
+    /// A reported field, strictly: the inverse of `fieldJson`. The type is checked here so an unknown
+    /// one is refused as it always was; the metadata members go through Core's field codec.
+    let private fieldOf (path: string) (v: JVal) : Result<Field, WireError> =
+        result {
+            let! fs = fieldsOf path v
+            do! only path [ "name"; "type"; "unit"; "label"; "description"; "ext" ] fs
+            let! _ = str path "name" fs
+            let! tag = str path "type" fs
+            let! _ = columnTypeOf (path + ".type") tag
+
+            return!
+                ColumnCodec.decodeField v
+                |> Result.mapError (fun e -> WireError.BadField(path, ColumnCodec.errorString e))
         }
 
     let private typedPairs (path: string) (name: string) fs =
@@ -581,7 +601,11 @@ module SessionWire =
                     let! fs = fieldsOf p t
                     do! only p [ "name"; "columns" ] fs
                     let! name = str p "name" fs
-                    let! columns = typedPairs p "columns" fs
+
+                    let! columns =
+                        arr p "columns" fs
+                        |> Result.bind (traverse (fun i v -> fieldOf (sprintf "%s.columns[%d]" p i) v))
+
                     return { Name = name; Columns = columns }
                 })
             |> Result.map (fun ts -> { Tables = ts })

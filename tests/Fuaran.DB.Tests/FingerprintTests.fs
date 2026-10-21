@@ -18,7 +18,7 @@ let private items =
         "items"
         [ col "c:items.id" "id" IntType "public"
           col "c:items.price" "price" DecimalType "public"
-          col "c:items.updated_at" "updated_at" TimestampType "public" ]
+          col "c:items.updated_at" "updated_at" (TimestampType TimeUnit.Seconds) "public" ]
 
 let private stock =
     table
@@ -47,7 +47,7 @@ let private shop (fingerprint: FingerprintMethod option) : ModelNode =
             Children = [ items; stock ] }
           { Id = "s:other"
             Kind = NodeKind.Source { Name = "other"; Fingerprint = None }
-            Children = [ table "t:other" "other" [ col "c:other.at" "at" TimestampType "public" ] ] } ] }
+            Children = [ table "t:other" "other" [ col "c:other.at" "at" (TimestampType TimeUnit.Seconds) "public" ] ] } ] }
 
 /// An engine that keeps a change counter: the reference dialect with one.
 let private counterDialect: Dialect =

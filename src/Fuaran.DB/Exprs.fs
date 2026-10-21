@@ -19,6 +19,7 @@ module Reads =
         | Not x
         | IsNull x
         | Cast(_, x)
+        | Convert(x, _)
         | Rounded(x, _) -> ofExpr x
         | InParam(x, _) -> ofExpr x
         | Coalesce xs

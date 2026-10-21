@@ -7,9 +7,9 @@ open Fuaran.DB
 let private reported: ReportedSchema =
     { Tables =
         [ { Name = "Orders"
-            Columns = [ "OrderId", IntType; "Revenue", DecimalType; "Channel", StringType ] }
+            Columns = Sample.fields [ "OrderId", IntType; "Revenue", DecimalType; "Channel", StringType ] }
           { Name = "Customers"
-            Columns = [ "CustomerId", IntType; "Email", StringType ] } ] }
+            Columns = Sample.fields [ "CustomerId", IntType; "Email", StringType ] } ] }
 
 let private seeded = Drift.seed "m:seeded" "seeded" "sales" "unclassified" reported
 
@@ -41,17 +41,18 @@ let tests =
               let moved =
                   { Tables =
                       [ { Name = "Orders"
-                          Columns = [ "OrderId", IntType; "NetRevenue", DecimalType; "Channel", StringType ] }
+                          Columns =
+                            Sample.fields [ "OrderId", IntType; "NetRevenue", DecimalType; "Channel", StringType ] }
                         { Name = "Customers"
-                          Columns = [ "CustomerId", IntType; "Email", StringType ] } ] }
+                          Columns = Sample.fields [ "CustomerId", IntType; "Email", StringType ] } ] }
 
               let modelOrders = Model.tables seeded |> List.head |> fst |> Model.physicalSchemaOf
 
               match Drift.check seeded "sales" moved with
               | Some [ TableDrift.Drifted("Orders", delta); TableDrift.InStep "Customers" ] ->
                   Expect.equal delta (Schema.diff modelOrders moved.Tables.Head.Columns) "Schema.diff's verdict"
-                  Expect.equal delta.Removed [ "Revenue", DecimalType ] "the model's column is gone"
-                  Expect.equal delta.Added [ "NetRevenue", DecimalType ] "the source's new column"
+                  Expect.equal delta.Removed (Sample.fields [ "Revenue", DecimalType ]) "the model's column is gone"
+                  Expect.equal delta.Added (Sample.fields [ "NetRevenue", DecimalType ]) "the source's new column"
                   Expect.isTrue (Drift.hasDrift [ TableDrift.Drifted("Orders", delta) ]) "drift"
               | other -> failtestf "expected Orders drifted, got %A" other
 
@@ -60,9 +61,9 @@ let tests =
               let moved =
                   { Tables =
                       [ { Name = "Orders"
-                          Columns = [ "OrderId", IntType; "Revenue", FloatType; "Channel", StringType ] }
+                          Columns = Sample.fields [ "OrderId", IntType; "Revenue", FloatType; "Channel", StringType ] }
                         { Name = "Returns"
-                          Columns = [ "ReturnId", IntType ] } ] }
+                          Columns = Sample.fields [ "ReturnId", IntType ] } ] }
 
               match Drift.check seeded "sales" moved with
               | Some [ TableDrift.Drifted("Orders", delta)

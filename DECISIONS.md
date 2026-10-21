@@ -1,5 +1,71 @@
 # Fuaran.DB — decisions (newest first)
 
+## 2026-10-21 — D12: a modelled column is a Core field (Phase 2)
+
+A column of the dataset model was a record of its own: a name, a physical identifier, a type and a
+classification. Core's schema entry is now a `Field` (fuaran-core#427), carrying a unit, a label, a
+description and namespaced extension members, and the evaluator checks units through every pipeline
+(fuaran-core#429). A model that kept its own column record would duplicate the first and miss the
+second. Five rulings, each with what would reopen it.
+
+1. **A modelled column is a `Field` plus what only the model knows.** `ColumnSpec` is
+   `{ Field; Physical; Classification }`. The field's `Name` is the model name, and its type, unit, label
+   and description are the column's; `c.Name` and `c.Type` read through it. `ColumnSpec.create`,
+   `rename`, `retype` and `physicalField` build and refine one, carrying the metadata across, because
+   Core's `Field` has no rename builder. `Model.schemaOf` and `physicalSchemaOf` hand out the fields
+   themselves, so whatever reads a model's schema (the pipeline check, drift, the projection) reads the
+   units without being told to. *Reopen if* Core's `Field` gains a member the model must not pass on.
+2. **The classification stays a member of the column record. It does not ride the field's extension
+   map.** Four reasons. The classification is governance the policy reads against a closed, declared
+   set (`DB-CLASSIFICATION-UNDECLARED`), and a typed member keeps that check where it is; an extension
+   value is a string Core preserves and never interprets. The field is what a pipeline carries into the
+   evaluator, and a classification is not meaning a derived column should inherit or a result should
+   show. A reported schema never states one, so an extension key would surface in every drift check as
+   an `Ext` change Core classifies `Unknown`. And the per-peer projection withholds and rewrites
+   classifications on its own terms (D10), which it can only do to a member it owns. *Reopen if* a
+   second domain needs to read a column's classification from the field alone, which would mean a
+   namespaced key (`fuaran.db.classification`) beside, not instead of, this member.
+3. **The wire writes the field's metadata in Core's own spelling, and only when stated.** A `column` node
+   carries `unit` (Core's canonical unit text), `label`, `description` and `ext` exactly as
+   `ColumnCodec.fieldJson` writes them, and reads them back through `ColumnCodec.decodeField`; a refusal
+   there is the new `DB-WIRE-BAD-FIELD`. A column stating none renders to the bytes it rendered before,
+   so every existing vector is unchanged and `ops/09-amend.json` is the new one. The connection record's
+   reported schema is written the same way, so a reported unit survives a session. The AI surface's
+   `tables` tool names a column's unit, label and description where the model states them. *Reopen if*
+   Core's field document changes spelling.
+4. **Seeding keeps a reported field whole; drift reports only what the source states differently.**
+   `Drift.seed` takes each reported field as the column's field, so a reported unit and label are the
+   model's from the start. `Drift.check` is still `Schema.diff` over physical names, so a unit, label or
+   description change arrives as Core's `SchemaDelta.Amended` beside a retype. Before the diff, a
+   reported field's UNSTATED members are filled from the model: a source that reports no unit (most
+   catalogues report none) is silent about the unit, not withdrawing it, and is not drift. The
+   projection's drift gains `ProjectionChange.ColumnAmended`; a unit change there is breaking, because a
+   pipeline the pin admitted can be refused under the new unit, and a label or description change is
+   not. *Reopen if* a source can positively report that a column has NO unit; the overlay would then
+   need a way to tell "states none" from "says nothing".
+5. **A pipeline checked against the model meets the evaluator's unit check, before anything is lowered.**
+   `PipelineCheck` asks Compute's `DataFrame.resolveUnits` about every filter and derive, over the fields
+   the schema walk carries at that step (seeded from the model, so the model's units are the input's).
+   A join's key pairs and a set operation's column pairs are held to the comparison's rule (two stated
+   units must be one unit; an unconstrained side matches anything), which is the evaluator's own. A
+   refusal is the new `PipelineRefusal.UnitMismatch`, naming the step, what met and both units, and
+   `Policy.admit` surfaces it as it surfaces every pipeline refusal, so the provider never lowers a
+   pipeline that adds pounds to kilograms. A conversion is an explicit `Convert`. The provider lowers
+   none: a conversion is a cast to float times a factor, outside its declared subset, so it runs in the
+   local suffix. *Reopen if* the schema walk gains its own unit verdict; this check is then replaced by
+   it, not kept beside it.
+
+**The pins move to Core 0.37.0 and Compute 0.40.0, not to Core's newest.** Compute 0.40.0 is the newest
+published Compute and the first with the unit check. It was built against Core 0.37.0, the first Core
+with `Field`. Its assembly references Core's `Canon`, which Core 0.39.0 removed, so Core 0.40.1 beside
+it compiles and then fails to load the expression codec this package's wire uses. The pins move to
+Core's newest when a published Compute is built against it. Moving them crosses two other Core breaks,
+each handled where it lands: a `Column` is built through `Column.ofCells` (a cell its type cannot hold
+is refused, never thrown, on every path that reads recorded or engine data), and `TimestampType` carries
+a `TimeUnit`. A reported timestamp is `TimestampType TimeUnit.Seconds`, the unit both dialects' DDL
+already spells (`datetime2(0)`, `timestamp(0)`). The finer units map to the same DDL for now, which is
+a known gap.
+
 ## 2026-10-12 — D11: PostgreSQL, the second dialect (Phase 1906)
 
 `Fuaran.DB.Dialect.PostgreSql` is the second dialect. Its purpose is to find what the first left in the

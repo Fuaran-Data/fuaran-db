@@ -39,7 +39,7 @@ module internal Lowering =
     let private mint (n: int) = "c" + string n
 
     let schemaOf (cols: Col list) : Schema =
-        cols |> List.map (fun c -> c.Output.Name, c.Output.Type)
+        cols |> List.map (fun c -> Field.create c.Output.Name c.Output.Type)
 
     let private members (cols: Col list) = cols |> List.map _.Output.Name
 
@@ -96,6 +96,7 @@ module internal Lowering =
         | Not x
         | IsNull x
         | Cast(_, x)
+        | Convert(x, _)
         | Rounded(x, _)
         | InParam(x, _) -> [ x ]
         | Coalesce xs
@@ -111,6 +112,9 @@ module internal Lowering =
     let private excluded (e: ColExpr) : Construct option =
         match e with
         | Cast(ty, _) -> Some(Construct.Cast ty)
+        // A conversion is a cast to float times its factor (Compute D29), so it is a cast here:
+        // outside the declared subset, and evaluated locally.
+        | Convert _ -> Some(Construct.Cast FloatType)
         | ApplyFn(Lower, _) -> Some(Construct.Function Lower)
         | ApplyFn(Upper, _) -> Some(Construct.Function Upper)
         | ApplyFn(Length, _) -> Some(Construct.Function Length)
@@ -142,6 +146,7 @@ module internal Lowering =
         | Not _
         | IsNull _
         | Cast _
+        | Convert _
         | Rounded _
         | Quotient _
         | InParam _
@@ -220,6 +225,7 @@ module internal Lowering =
         | InParam(_, n) -> Error(Refusal.UnboundParam(step, n))
         | Now g -> Error(Refusal.UnpinnedClock(step, g))
         | Cast(ty, _) -> Error(Refusal.ConstructExcluded(step, Construct.Cast ty))
+        | Convert _ -> Error(Refusal.ConstructExcluded(step, Construct.Cast FloatType))
         | Quotient(_, _, r)
         | Rounded(_, r) -> Error(Refusal.ConstructExcluded(step, Construct.Rounding r.Mode))
 
@@ -465,7 +471,7 @@ module internal Lowering =
             | BoolType
             | StringType
             | DateType
-            | TimestampType -> false
+            | TimestampType _ -> false
         | Min
         | Max
         | Count

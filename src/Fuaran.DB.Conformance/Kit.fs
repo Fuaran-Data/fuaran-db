@@ -90,7 +90,14 @@ module Kit =
         PlacementLaws.reference (case Fixtures.tables f.Bindings f)
 
     let private rows (t: Table) : Cell list list =
-        [ for i in 0 .. Table.rowCount t - 1 -> t.Columns |> List.map (fun c -> c.Cells |> List.item i) ]
+        [ for i in 0 .. Table.rowCount t - 1 -> t.Columns |> List.map (Column.cell i) ]
+
+    /// `col` holding `cells` instead. The kit rebuilds a column only from cells of its own type, so
+    /// a refusal is a defect in the kit and throws.
+    let private refilled (col: Column) (cells: Cell list) : Column =
+        match Column.ofCells col.Name col.Type cells with
+        | Ok c -> c
+        | Error e -> invalidArg col.Name (ColumnCodec.errorString e)
 
     /// Do two answers agree: the same refusal, or the same schema and the same rows — in order when
     /// the fixture is ordered, as a bag otherwise.
@@ -152,7 +159,7 @@ module Kit =
             { t with
                 Columns =
                     t.Columns
-                    |> List.map (fun col -> Column.create col.Name col.Type (col.Cells |> List.map f)) }
+                    |> List.map (fun col -> refilled col (Column.toCells col |> List.map f)) }
 
         let bindings =
             { fixture.Bindings with
@@ -185,8 +192,7 @@ module Kit =
                         { source with
                             Columns =
                                 source.Columns
-                                |> List.mapi (fun j col ->
-                                    Column.create col.Name col.Type (order |> List.map (List.item j))) }
+                                |> List.mapi (fun j col -> refilled col (order |> List.map (List.item j))) }
 
                     PlacementLaws.reference (case (Map.add f.Source permuted Fixtures.tables) f.Bindings f))
             | Some _

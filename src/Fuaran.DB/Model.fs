@@ -69,18 +69,70 @@ type TableSpec =
         Physical: string
     }
 
-/// A column: its model name, its physical identifier, its type and its classification.
+/// A column (Phase 2, DECISIONS.md D12): a Core `Field` — the model name, the type, and the unit,
+/// label, description and extension members that say what the column MEANS — plus the two things only
+/// the dataset model knows: the source's physical identifier and the column's classification.
+///
+/// The field is what a pipeline checked against the model reads, so the evaluator sees the column's
+/// unit; the classification stays a member of this record and never rides the field's extension
+/// map, because it is governance the policy reads, not meaning a pipeline carries (D12).
 type ColumnSpec =
     {
-        /// The model name — what a pipeline reads. Unique within its table.
-        Name: string
+        /// The column's Core field. Its `Name` is the model name — what a pipeline reads, unique
+        /// within its table — and its `Type`, unit, label and description are the column's.
+        Field: Field
         /// The source's own identifier for the column; what a drift check compares.
         Physical: string
-        /// The column's type, in Core's column model.
-        Type: ColumnType
         /// One of the model's declared classifications.
         Classification: string
     }
+
+    /// The model name — what a pipeline reads. Unique within its table.
+    member c.Name: string = c.Field.Name
+
+    /// The column's type, in Core's column model.
+    member c.Type: ColumnType = c.Field.Type
+
+/// Building and refining a column.
+[<RequireQualifiedAccess>]
+module ColumnSpec =
+
+    /// A column of model name `name`, physical identifier `physical`, type `ty` and classification
+    /// `classification`, stating no unit, label or description.
+    let create (name: string) (physical: string) (ty: ColumnType) (classification: string) : ColumnSpec =
+        { Field = Field.create name ty
+          Physical = physical
+          Classification = classification }
+
+    /// The field `f` under the name `name`, every other member kept. Core's `Field` has no rename
+    /// builder, so the metadata is carried across member by member.
+    let renameField (name: string) (f: Field) : Field =
+        let carry (v: 'T option) (add: 'T -> Field -> Field) (g: Field) =
+            match v with
+            | Some x -> add x g
+            | None -> g
+
+        f.Ext
+        |> Map.fold
+            (fun g k v -> Field.withExt k v g)
+            (Field.create name f.Type
+             |> carry f.Unit Field.withUnit
+             |> carry f.Label Field.withLabel
+             |> carry f.Description Field.withDescription)
+
+    /// The column under the model name `name`, its physical identifier, metadata and classification
+    /// kept.
+    let rename (name: string) (c: ColumnSpec) : ColumnSpec =
+        { c with
+            Field = renameField name c.Field }
+
+    /// The column retyped to `ty`, its metadata kept.
+    let retype (ty: ColumnType) (c: ColumnSpec) : ColumnSpec =
+        { c with
+            Field = Field.withType ty c.Field }
+
+    /// The column's field under its PHYSICAL name — the entry its source reports.
+    let physicalField (c: ColumnSpec) : Field = renameField c.Physical c.Field
 
 /// A permitted join: two tables, by id, and the key pairs that relate them, by column id.
 /// A pipeline may join two tables only through a relation declared here.
@@ -355,13 +407,14 @@ module Model =
     let tryTable (name: string) (root: ModelNode) : (ModelNode * TableSpec) option =
         tables root |> List.tryFind (fun (_, t) -> t.Name = name)
 
-    /// A table's schema in MODEL names — what a pipeline over it reads.
+    /// A table's schema in MODEL names — what a pipeline over it reads: each column's field, with
+    /// its unit, label and description, so a pipeline checked against the model checks units.
     let schemaOf (table: ModelNode) : Schema =
-        columns table |> List.map (fun (_, c) -> c.Name, c.Type)
+        columns table |> List.map (fun (_, c) -> c.Field)
 
-    /// A table's schema in PHYSICAL names — what its source reports.
+    /// A table's schema in PHYSICAL names — what its source reports, each field keeping its metadata.
     let physicalSchemaOf (table: ModelNode) : Schema =
-        columns table |> List.map (fun (_, c) -> c.Physical, c.Type)
+        columns table |> List.map (fun (_, c) -> ColumnSpec.physicalField c)
 
     /// Every table's model schema, keyed by its model name — the `sources` a schema walk reads.
     let schemas (root: ModelNode) : Map<string, Schema> =

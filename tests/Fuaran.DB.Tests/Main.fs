@@ -33,7 +33,7 @@ let private writeFixtures () =
             "unclassified"
             { Tables =
                 [ { Name = "Orders"
-                    Columns = [ "OrderId", IntType; "Revenue", DecimalType ] } ] }
+                    Columns = Sample.fields [ "OrderId", IntType; "Revenue", DecimalType ] } ] }
 
     write "states" "retail" (ModelWire.encodeState Sample.state)
     write "states" "retail-retired" (ModelWire.encodeState retired)

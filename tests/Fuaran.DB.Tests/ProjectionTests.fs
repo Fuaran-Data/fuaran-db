@@ -36,11 +36,7 @@ let private twin: ModelNode =
             match n.Kind with
             | NodeKind.Column c ->
                 { n with
-                    Kind =
-                        NodeKind.Column
-                            { c with
-                                Name = "contact"
-                                Type = IntType } }
+                    Kind = NodeKind.Column(c |> ColumnSpec.rename "contact" |> ColumnSpec.retype IntType) }
             | _ -> n)
         |> Sample.replace "p:orders.web" (fun n ->
             { n with
@@ -423,7 +419,7 @@ let tests =
                       match n.Kind with
                       | NodeKind.Column c ->
                           { n with
-                              Kind = NodeKind.Column { c with Type = ty } }
+                              Kind = NodeKind.Column(ColumnSpec.retype ty c) }
                       | _ -> n)
 
               let self = ModelProjection.drift pinned pinned

@@ -14,14 +14,7 @@ let private codeOf (r: Result<'a, WireError>) : string =
 let sampleOps: ModelOp list =
     [ ModelOp.Add("t:orders", col "c:orders.discount" "discount" DecimalType "public")
       ModelOp.Add("s:sales", lines)
-      ModelOp.Amend(
-          "c:orders.revenue",
-          NodeKind.Column
-              { Name = "amount"
-                Physical = "REVENUE"
-                Type = DecimalType
-                Classification = "public" }
-      )
+      ModelOp.Amend("c:orders.revenue", NodeKind.Column(ColumnSpec.create "amount" "REVENUE" DecimalType "public"))
       ModelOp.Amend("l:rows", NodeKind.Limit(LimitSpec.rows "rows" 500))
       ModelOp.Retire "j:orders-customers"
       // last, so the vectors before it keep their numbers: a limit declaring every cost cap
@@ -49,6 +42,21 @@ let sampleOps: ModelOp list =
               { Name = "retail"
                 Classifications = [ "public"; "personal" ]
                 Recordable = [ "public" ] }
+      )
+      // then a column stating its unit, label and description (Phase 2), each written only when stated
+      ModelOp.Amend(
+          "c:orders.revenue",
+          NodeKind.Column
+              { ColumnSpec.create "revenue" "REVENUE" DecimalType "public" with
+                  Field =
+                      Field.create "revenue" DecimalType
+                      |> Field.withUnit (
+                          match Unit.parse "[GBP]" with
+                          | Ok u -> u
+                          | Error e -> failwithf "%A" e
+                      )
+                      |> Field.withLabel "Revenue"
+                      |> Field.withDescription "The order's revenue, net of discounts." }
       ) ]
 
 [<Tests>]

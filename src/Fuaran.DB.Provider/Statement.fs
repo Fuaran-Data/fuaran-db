@@ -241,7 +241,7 @@ module Statement =
 
     /// The result schema in the pipeline's names — what the local suffix reads.
     let schema (s: Statement) : Schema =
-        s.Columns |> List.map (fun o -> o.Name, o.Type)
+        s.Columns |> List.map (fun o -> Field.create o.Name o.Type)
 
     /// The statement's rows as a table in the pipeline's names, read POSITIONALLY: the i-th cell of
     /// every row is the i-th column. A row of another width, or a cell its column's type does not
@@ -259,7 +259,11 @@ module Statement =
         | None ->
             let columns =
                 s.Columns
-                |> List.mapi (fun j o -> Column.create o.Name o.Type (rows |> List.map (fun r -> List.item j r)))
+                |> List.mapi (fun j o -> Column.ofCells o.Name o.Type (rows |> List.map (fun r -> List.item j r)))
+                |> List.fold (fun acc c -> acc |> Result.bind (fun cs -> c |> Result.map (fun c -> c :: cs))) (Ok [])
+                |> Result.map List.rev
 
-            let table = { Schema = schema s; Columns = columns }
-            Table.validate table |> Result.map (fun () -> table)
+            columns
+            |> Result.bind (fun columns ->
+                let table = { Schema = schema s; Columns = columns }
+                Table.validate table |> Result.map (fun () -> table))

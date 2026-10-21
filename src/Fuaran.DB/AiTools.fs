@@ -40,11 +40,15 @@ module AiTools =
                   JArr(
                       Model.columns t
                       |> List.map (fun (c, cs) ->
-                          JObj
+                          // A column's unit, label and description go to the caller when the model
+                          // states them (Phase 2), so a pipeline it writes can respect the unit.
+                          JObj(
                               [ "id", JStr c.Id
                                 "name", JStr cs.Name
                                 "type", JStr(ColumnType.tag cs.Type)
-                                "classification", JStr cs.Classification ])
+                                "classification", JStr cs.Classification ]
+                              @ ModelWire.metadataJson cs.Field
+                          ))
                   )
                   "rowPolicies", JArr policies ])
         |> JArr
@@ -123,7 +127,8 @@ module AiTools =
             Description = "The model as a tree of ids, kinds and names."
             Run = fun s -> outlineOf s.Root }
           { Name = "tables"
-            Description = "Every table with its columns (name, type, classification) and its row policies."
+            Description =
+              "Every table with its columns (name, type, classification, and the unit, label and description where the model states them) and its row policies."
             Run = fun s -> tablesOf s.Root }
           { Name = "relations"
             Description = "The joins the model permits, by table and column name."

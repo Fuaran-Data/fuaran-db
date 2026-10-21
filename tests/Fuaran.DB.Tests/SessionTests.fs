@@ -28,7 +28,7 @@ let private withChange (cls: string) =
         "customers"
         [ col "c:customers.customer_id" "customer_id" IntType "public"
           col "c:customers.email" "email" StringType "personal"
-          col "c:customers.updated_at" "updated_at" TimestampType cls ]
+          col "c:customers.updated_at" "updated_at" (TimestampType TimeUnit.Seconds) cls ]
 
 /// The worked model: orders are public, a customer's address is personal, and the model marks only
 /// `public` recordable. `customerChange` classifies the customers' change column.
@@ -57,7 +57,7 @@ let modelWith (recordable: string list) (customerChange: string) : ModelNode =
                       col "c:orders.customer_id" "customer_id" IntType "public"
                       col "c:orders.amount" "amount" IntType "public"
                       col "c:orders.channel" "channel" StringType "public"
-                      col "c:orders.updated_at" "updated_at" TimestampType "public" ]
+                      col "c:orders.updated_at" "updated_at" (TimestampType TimeUnit.Seconds) "public" ]
                 withChange customerChange ] }
           leaf
               "l:cost"
@@ -80,11 +80,11 @@ let private analyst: Subject =
           { Classification = "personal"
             Level = GrantLevel.RowLevel } ] }
 
-let private tableOf (schema: Schema) (rows: Cell list list) : Table =
-    { Schema = schema
+let private tableOf (schema: (string * ColumnType) list) (rows: Cell list list) : Table =
+    { Schema = Sample.fields schema
       Columns =
         schema
-        |> List.mapi (fun j (n, ty) -> Column.create n ty (rows |> List.map (List.item j))) }
+        |> List.mapi (fun j (n, ty) -> Sample.column n ty (rows |> List.map (List.item j))) }
 
 /// The source as an engine holds it, by model table name.
 let private held: Map<string, Table> =
@@ -95,14 +95,16 @@ let private held: Map<string, Table> =
                 "customer_id", IntType
                 "amount", IntType
                 "channel", StringType
-                "updated_at", TimestampType ]
+                "updated_at", (TimestampType TimeUnit.Seconds) ]
               [ [ Int 1; Int 7; Int 40; Str "web"; Timestamp "2026-10-01T08:00:00Z" ]
                 [ Int 2; Int 7; Int 5; Str "shop"; Timestamp "2026-10-02T08:00:00Z" ]
                 [ Int 3; Int 8; Int 25; Str "web"; Timestamp "2026-10-03T08:00:00Z" ]
                 [ Int 4; Int 9; Int 60; Str "retail"; Timestamp "2026-10-04T08:00:00Z" ] ]
           "customers",
           tableOf
-              [ "customer_id", IntType; "email", StringType; "updated_at", TimestampType ]
+              [ "customer_id", IntType
+                "email", StringType
+                "updated_at", (TimestampType TimeUnit.Seconds) ]
               [ [ Int 7; Str secretEmail; Timestamp secretChange ]
                 [ Int 8; Str needle; Timestamp "2026-10-05T08:00:00Z" ] ] ]
 
@@ -148,7 +150,7 @@ let private readingOf (m: ModelNode) (orders: Table) (customers: Table) : Finger
         let col = t.Columns |> List.find (fun c -> c.Name = changeAt)
 
         let max =
-            col.Cells
+            (Column.toCells col)
             |> List.filter (fun c -> not (Cell.isNull c))
             |> List.sortWith (fun a b -> Cell.compare a b |> Option.defaultValue 0)
             |> List.tryLast
@@ -172,13 +174,18 @@ let drive (m: ModelNode) (execute: Execute) : Session =
         { Tables =
             [ { Name = "dbo.orders"
                 Columns =
-                  [ "ORDER_ID", IntType
-                    "CUSTOMER_ID", IntType
-                    "AMOUNT", IntType
-                    "CHANNEL", StringType
-                    "UPDATED_AT", TimestampType ] }
+                  Sample.fields
+                      [ "ORDER_ID", IntType
+                        "CUSTOMER_ID", IntType
+                        "AMOUNT", IntType
+                        "CHANNEL", StringType
+                        "UPDATED_AT", TimestampType TimeUnit.Seconds ] }
               { Name = "dbo.customers"
-                Columns = [ "CUSTOMER_ID", IntType; "EMAIL", StringType; "UPDATED_AT", TimestampType ] } ] }
+                Columns =
+                  Sample.fields
+                      [ "CUSTOMER_ID", IntType
+                        "EMAIL", StringType
+                        "UPDATED_AT", (TimestampType TimeUnit.Seconds) ] } ] }
 
     let resolve name = Error(EvalError.UnresolvedSource name)
 

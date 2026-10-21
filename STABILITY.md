@@ -211,3 +211,32 @@ and recorded as such; each would advance the version on a released slot.
 - **Additive — the conformance set**: the seed gains the table `words` and the bindings `p_private_use`;
   two fixtures, `difference-collation-order` and `difference-code-point-order`, take the set to 64. Every
   existing fixture file, and every existing table's encoding in `seed.json`, keeps its bytes (D11.4).
+
+Riding the draft (Phase 2), on the same terms: a modelled column is a Core field (DECISIONS.md D12).
+Its changes are BREAKING in shape and recorded as such; each would advance the version on a released
+slot.
+
+- **Breaking — the pins move to `Fuaran.Core.*` 0.37.0 and `Fuaran.Compute.DataFrame` 0.40.0** (D12, the
+  closing paragraph). Core's `Schema` is a `Field list`, so every surface here that takes or answers a
+  `Schema` (`Model.schemaOf`, `physicalSchemaOf`, `schemas`, `ReportedTable.Columns`, `Statement.schema`,
+  `SchemaDelta` in `TableDrift.Drifted`) now carries fields, not `(name, type)` pairs.
+- **Breaking — `ColumnSpec` is `{ Field; Physical; Classification }`.** A full-literal construction stops
+  compiling; `ColumnSpec.create name physical ty classification` builds the column the old literal did, and
+  `c.Name` and `c.Type` still read. Additive beside it: `ColumnSpec.rename`, `retype`, `renameField` and
+  `physicalField`.
+- **Breaking — `PipelineRefusal` gains `UnitMismatch`, `WireError` gains `BadField` and
+  `ProjectionChange` gains `ColumnAmended`.** A closed union gaining a case breaks every exhaustive match.
+  The new codes are `DB-WIRE-BAD-FIELD` and, through `Policy.admit`, the pipeline refusal it already
+  carried.
+- **The posture, tightened — the pipeline check runs the evaluator's unit check** (D12.5): a pipeline
+  that combines or compares two different stated units, in a filter, a derive, a join key or a set
+  operation, is refused before anything is lowered. A model that states no unit admits exactly what it
+  admitted before.
+- **Additive — the wire**: a `column` node may carry `unit`, `label`, `description` and `ext` in Core's
+  field spelling, each written only when stated, and a reported schema in the connection record carries
+  them the same way. A column stating none renders to the bytes it rendered before, so every existing
+  vector is unchanged; `ops/09-amend.json` and the reject `column-unit-unreadable` are the new ones. A
+  decoder older than this draft refuses a column that states any of them, by name.
+- **Additive — drift and the AI surface**: seeding keeps a reported field's metadata; `Drift.check` reports
+  a unit, label or description the source states differently through `SchemaDelta.Amended`, and never one
+  it does not state; the `tables` read tool names a column's unit, label and description where stated.

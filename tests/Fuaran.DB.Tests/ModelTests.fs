@@ -27,11 +27,7 @@ let tests =
           testCase "a rename is an amend that keeps identity and every reference to it"
           <| fun _ ->
               let renamed =
-                  NodeKind.Column
-                      { Name = "amount"
-                        Physical = "REVENUE"
-                        Type = DecimalType
-                        Classification = "public" }
+                  NodeKind.Column(ColumnSpec.create "amount" "REVENUE" DecimalType "public")
 
               match ModelOps.apply (ModelOp.Amend("c:orders.revenue", renamed)) state with
               | Ok s ->
@@ -130,5 +126,5 @@ let tests =
                       match OpStream.replay sw state back with
                       | Ok replayed -> Expect.equal replayed final "replay reaches the same model"
                       | Error e -> failtestf "replay failed: %A" e
-                  | Error e -> failtestf "fromJsonl failed: %s" e
+                  | Error e -> failtestf "fromJsonl failed: %A" e
               | Error e -> failtestf "append failed: %A" e ]

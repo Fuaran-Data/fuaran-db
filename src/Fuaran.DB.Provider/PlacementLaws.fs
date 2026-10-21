@@ -41,13 +41,19 @@ module PlacementLaws =
 
     let private column (id: string) (name: string) (physical: string) (ty: ColumnType) : ModelNode =
         { Id = id
-          Kind =
-            NodeKind.Column
-                { Name = name
-                  Physical = physical
-                  Type = ty
-                  Classification = "public" }
+          Kind = NodeKind.Column(ColumnSpec.create name physical ty "public")
           Children = [] }
+
+    /// A table of `(name, type)` columns over `cells`, one cell list per column. The sample draws
+    /// only cells its column's type holds, so a refusal is a defect in the sample and throws.
+    let private tableOf (columns: (string * ColumnType) list) (cells: Cell list list) : Table =
+        { Schema = columns |> List.map (fun (n, ty) -> Field.create n ty)
+          Columns =
+            List.zip columns cells
+            |> List.map (fun ((n, ty), cs) ->
+                match Column.ofCells n ty cs with
+                | Ok c -> c
+                | Error e -> invalidArg n (ColumnCodec.errorString e)) }
 
     let private table (id: string) (name: string) (physical: string) (columns: ModelNode list) : ModelNode =
         { Id = id
@@ -123,7 +129,7 @@ module PlacementLaws =
                     Map.tryFind name rename |> Option.defaultValue name
 
                 spec.Physical,
-                { Schema = t.Schema |> List.map (fun (n, ty) -> physical n, ty)
+                { Schema = t.Schema |> List.map (fun f -> ColumnSpec.renameField (physical f.Name) f)
                   Columns = t.Columns |> List.map (fun c -> { c with Name = physical c.Name }) }))
         |> Map.ofList
 
@@ -139,11 +145,11 @@ module PlacementLaws =
     let private agg (name: string) (fn: AggFn) (over: string) : Agg = { Name = name; Fn = fn; Of = over }
 
     let private customersTable (rows: (Cell * Cell * Cell) list) : Table =
-        { Schema = [ "id", IntType; "name", StringType; "amt", FloatType ]
-          Columns =
-            [ Column.create "id" IntType (rows |> List.map (fun (a, _, _) -> a))
-              Column.create "name" StringType (rows |> List.map (fun (_, b, _) -> b))
-              Column.create "amt" FloatType (rows |> List.map (fun (_, _, c) -> c)) ] }
+        tableOf
+            [ "id", IntType; "name", StringType; "amt", FloatType ]
+            [ rows |> List.map (fun (a, _, _) -> a)
+              rows |> List.map (fun (_, b, _) -> b)
+              rows |> List.map (fun (_, _, c) -> c) ]
 
     /// The step templates a pipeline is drawn from. Each names what it is there to reach.
     let private templates (customers: Table) : Transform list list =
@@ -283,10 +289,7 @@ module PlacementLaws =
                   "d", DateType
                   "big", IntType ]
 
-            { Schema = schema
-              Columns =
-                schema
-                |> List.mapi (fun j (name, ty) -> Column.create name ty (rows |> List.map (List.item j))) }
+            tableOf schema (schema |> List.mapi (fun j _ -> rows |> List.map (List.item j)))
 
         let customers =
             customersTable
@@ -300,12 +303,9 @@ module PlacementLaws =
                 [ for _ in 1 .. below 5 ->
                       maybe 15 (fun () -> Int(1 + below 6)), maybe 15 (fun () -> Float(float (below 9) / 3.0)) ]
 
-            { Schema = [ "ref", IntType; "w", FloatType ]
-              Columns =
-                [ Column.create "ref" IntType (rows |> List.map fst)
-                  Column.create "w" FloatType (rows |> List.map snd) ] }
+            tableOf [ "ref", IntType; "w", FloatType ] [ rows |> List.map fst; rows |> List.map snd ]
 
-        let ledger = { Schema = []; Columns = [] }
+        let ledger = tableOf [] []
 
         let tables =
             Map.ofList

@@ -24,6 +24,11 @@ type PipelineRefusal =
     /// A sort key is bound at run time; a request never chooses an identifier the model has not
     /// vouched for. Substitute the binding first and check the result.
     | UnboundSortKey of step: int * param: string
+    /// The evaluator's unit check (Phase 2, over Compute's `DataFrame.resolveUnits`) refuses the
+    /// step over the model's fields: `at` names what met (the step and expression, a join key, a
+    /// set-operation column) and `left` / `right` the two units, as their canonical text. A column
+    /// the model states no unit for is unconstrained and never refused.
+    | UnitMismatch of step: int * at: string * left: string * right: string
 
 /// The check of a transform pipeline against a dataset model
 /// (`validator:Fuaran.DB.PipelineAgainstModel`). Default-deny: a table, column or join the model
@@ -63,6 +68,8 @@ module PipelineCheck =
         | PipelineRefusal.EmbeddedOperand s -> sprintf "step %d brings in an embedded table, not a modelled source" s
         | PipelineRefusal.UnboundSortKey(s, p) ->
             sprintf "step %d sorts by param '%s', bound at run time; substitute it and check again" s p
+        | PipelineRefusal.UnitMismatch(s, at, l, r) ->
+            sprintf "step %d: unit mismatch in %s: %s against %s; convert one side explicitly" s at l r
 
     /// A declared relation as the column-name pairs a pipeline would write, oriented so the
     /// joined (right) table is `right`. `None` when the relation does not involve `right` and
@@ -116,6 +123,71 @@ module PipelineCheck =
                 |> List.tryFind (fun c -> not (SchemaWalk.has c k))
                 |> Option.map (fun c -> PipelineRefusal.UnknownColumn(step, c, membersAt k))
 
+    /// The fields the knowledge reaching a step states, each with its unit — what the evaluator's
+    /// unit check reads. An undecided type stands in as a string: the check reads units, not types.
+    let private fieldsAt (k: SchemaKnowledge) : Schema =
+        SchemaWalk.columns k |> List.map (ColumnKnowledge.toFieldAs StringType)
+
+    /// Two stated units must be one unit where two columns meet as one (a join key, a set
+    /// operation's column pair); an unconstrained side matches anything — the evaluator's rule.
+    let private unitsMeet (step: int) (at: string) (l: UnitOfMeasure option) (r: UnitOfMeasure option) =
+        match l, r with
+        | Some lu, Some ru when Unit.render lu <> Unit.render ru ->
+            Some(PipelineRefusal.UnitMismatch(step, at, Unit.render lu, Unit.render ru))
+        | _ -> None
+
+    /// The evaluator's unit check over one step, decided over the model's fields before any row:
+    /// a filter's predicate and a derive's expression through `DataFrame.resolveUnits`, a join's
+    /// key pairs and a set operation's column pairs by the comparison's rule.
+    let private checkUnits
+        (step: int)
+        (t: Transform)
+        (k: SchemaKnowledge)
+        (operand: (ModelNode * TableSpec) option)
+        : PipelineRefusal option =
+        let resolve (what: string) (e: ColExpr) =
+            match DataFrame.resolveUnits what (fieldsAt k) e with
+            | Ok _ -> None
+            | Error(UnitMismatch(at, _, l, r)) -> Some(PipelineRefusal.UnitMismatch(step, at, l, r))
+            | Error other -> Some(PipelineRefusal.UnitMismatch(step, DataFrame.errorString other, "", ""))
+
+        let operandUnit (c: string) =
+            operand
+            |> Option.bind (fun (n, _) -> Model.schemaOf n |> List.tryFind (fun f -> f.Name = c))
+            |> Option.bind _.Unit
+
+        match t with
+        | Filter p -> resolve "filter" p
+        | Derive(name, e) -> resolve ("derive '" + name + "'") e
+        | Join(_, on, _) ->
+            on
+            |> List.tryPick (fun (l, r) ->
+                unitsMeet step ("join key '" + l + "' = '" + r + "'") (SchemaWalk.unitOf l k) (operandUnit r))
+        | Union _
+        | Intersect _
+        | Except _ ->
+            match operand with
+            | None -> None
+            | Some(n, _) ->
+                // Columns pair by position; a width mismatch is the evaluator's shape refusal, not a
+                // unit's, so only equal widths are paired here.
+                let left = SchemaWalk.columns k
+                let right = Model.schemaOf n
+
+                if List.length left <> List.length right then
+                    None
+                else
+                    List.zip left right
+                    |> List.tryPick (fun (l, r) -> unitsMeet step ("set column '" + l.Name + "'") l.Unit r.Unit)
+        | Project _
+        | GroupBy _
+        | Window _
+        | Pivot _
+        | Unpivot _
+        | Sort _
+        | Distinct
+        | Limit _ -> None
+
     /// The modelled table an operand names, or why it is refused.
     let private operandTable
         (root: ModelNode)
@@ -154,7 +226,7 @@ module PipelineCheck =
                 let joinCheck =
                     match t, operand with
                     | Join(_, on, _), Some(rightNode, rightSpec) ->
-                        let rightMembers = Model.schemaOf rightNode |> List.map fst
+                        let rightMembers = Model.schemaOf rightNode |> List.map _.Name
 
                         match on |> List.tryFind (fun (_, r) -> not (List.contains r rightMembers)) with
                         | Some(_, r) -> Error(PipelineRefusal.UnknownColumn(step, r, rightMembers))
@@ -178,6 +250,10 @@ module PipelineCheck =
                     | _ -> Ok()
 
                 joinCheck
+                |> Result.bind (fun () ->
+                    match checkUnits step t walk.Knowledge operand with
+                    | Some r -> Error r
+                    | None -> Ok())
                 |> Result.map (fun () ->
                     { Knowledge = SchemaWalk.ofTransform sources walk.Knowledge t
                       Tables =

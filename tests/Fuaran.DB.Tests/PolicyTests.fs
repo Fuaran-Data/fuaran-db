@@ -19,11 +19,7 @@ let private iterations = 600
 let private col (table: string) (name: string) (ty: ColumnType) (cls: string) : ModelNode =
     Sample.leaf
         (sprintf "c:%s.%s" table name)
-        (NodeKind.Column
-            { Name = name
-              Physical = name.ToUpperInvariant()
-              Type = ty
-              Classification = cls })
+        (NodeKind.Column(ColumnSpec.create name (name.ToUpperInvariant()) ty cls))
 
 let private policy (id: string) (name: string) (predicate: ColExpr) : ModelNode =
     Sample.leaf id (NodeKind.RowPolicy { Name = name; Predicate = predicate })
@@ -162,11 +158,11 @@ let private subjects = [ analyst; hr; outsider; nobody; stranger ]
 
 // ---- the rows ----
 
-let private tableOf (schema: Schema) (rows: Cell list list) : Table =
-    { Schema = schema
+let private tableOf (schema: (string * ColumnType) list) (rows: Cell list list) : Table =
+    { Schema = Sample.fields schema
       Columns =
         schema
-        |> List.mapi (fun i (n, ty) -> Column.create n ty (rows |> List.map (List.item i))) }
+        |> List.mapi (fun i (n, ty) -> Sample.column n ty (rows |> List.map (List.item i))) }
 
 let private dec (v: int) = Decimal(string v)
 
@@ -634,7 +630,7 @@ let tests =
               match eval tables (Ref "staff") a.Pipeline with
               | Ok t ->
                   Expect.equal
-                      (t.Columns |> List.head |> _.Cells)
+                      (t.Columns |> List.head |> Sample.cells)
                       [ Str "eng"; Str "ops" ]
                       "groups smaller than the floor are gone"
               | Error e -> failtestf "%A" e
@@ -663,7 +659,7 @@ let tests =
               match eval tables (Ref "staff") a.Pipeline with
               | Ok t ->
                   Expect.isTrue
-                      (t.Columns |> List.item 1 |> _.Cells |> List.forall ((=) (Str "north")))
+                      (t.Columns |> List.item 1 |> Sample.cells |> List.forall ((=) (Str "north")))
                       "only the subject's region"
               | Error e -> failtestf "%A" e
 

@@ -15,6 +15,9 @@ type WireError =
     | UnknownColumnType of path: string * got: string * expected: string list
     | UnknownAggregate of path: string * got: string * expected: string list
     | BadExpression of path: string * detail: string
+    /// A column's field metadata (its unit, label, description or extension members) that Core's
+    /// field codec refuses — an unparseable unit, a non-string label (Phase 2).
+    | BadField of path: string * detail: string
     | UnsupportedVersion of got: int * supported: int list
 
 /// The strict reading helpers every wire codec in the domain decodes through: a field is present,
@@ -109,6 +112,7 @@ module ModelWire =
         | WireError.UnknownColumnType _ -> "DB-WIRE-UNKNOWN-COLUMN-TYPE"
         | WireError.UnknownAggregate _ -> "DB-WIRE-UNKNOWN-AGGREGATE"
         | WireError.BadExpression _ -> "DB-WIRE-BAD-EXPRESSION"
+        | WireError.BadField _ -> "DB-WIRE-BAD-FIELD"
         | WireError.UnsupportedVersion _ -> "DB-WIRE-UNSUPPORTED-VERSION"
 
     /// A wire error as one sentence.
@@ -124,6 +128,7 @@ module ModelWire =
         | WireError.UnknownAggregate(p, g, xs) ->
             sprintf "%s: aggregate '%s' is not one of %s" p g (String.concat ", " xs)
         | WireError.BadExpression(p, d) -> sprintf "%s: %s" p d
+        | WireError.BadField(p, d) -> sprintf "%s: %s" p d
         | WireError.UnsupportedVersion(g, xs) ->
             sprintf "version %d is not supported; this codec reads %s" g (xs |> List.map string |> String.concat ", ")
 
@@ -151,6 +156,17 @@ module ModelWire =
     // ---- encode ----
 
     let private strs (xs: string list) = JArr(xs |> List.map JStr)
+
+    /// The members of Core's field document that carry a field's metadata — beside `name` and `type`,
+    /// which a column writes itself.
+    let private metadataMembers = [ "unit"; "label"; "description"; "ext" ]
+
+    /// A field's stated metadata as Core's field codec writes it: the members of
+    /// `ColumnCodec.fieldJson` beyond `name` and `type`, none when the field states none.
+    let metadataJson (f: Field) : (string * JVal) list =
+        match ColumnCodec.fieldJson f with
+        | JObj members -> members |> List.filter (fun (k, _) -> List.contains k metadataMembers)
+        | _ -> []
 
     /// A fingerprint method as a typed object.
     let fingerprintJson (m: FingerprintMethod) : JVal =
@@ -182,10 +198,14 @@ module ModelWire =
                |> Option.toList)
         | NodeKind.Table s -> [ "name", JStr s.Name; "physical", JStr s.Physical ]
         | NodeKind.Column s ->
+            // The field's metadata members are Core's field document's own (`ColumnCodec.fieldJson`),
+            // written only when stated, so a column stating none renders to the bytes it rendered
+            // before they existed (DECISIONS.md D12).
             [ "name", JStr s.Name
               "physical", JStr s.Physical
               "type", JStr(ColumnType.tag s.Type)
               "classification", JStr s.Classification ]
+            @ metadataJson s.Field
         | NodeKind.Join s ->
             [ "name", JStr s.Name
               "left", JStr s.Left
@@ -260,7 +280,7 @@ module ModelWire =
         | "model" -> [ "name"; "classifications"; "recordable" ]
         | "source" -> [ "name"; "fingerprint" ]
         | "table" -> [ "name"; "physical" ]
-        | "column" -> [ "name"; "physical"; "type"; "classification" ]
+        | "column" -> [ "name"; "physical"; "type"; "classification" ] @ metadataMembers
         | "join" -> [ "name"; "left"; "right"; "on" ]
         | "measure" -> [ "name"; "fn"; "column" ]
         | "rowPolicy" -> [ "name"; "predicate" ]
@@ -373,16 +393,23 @@ module ModelWire =
                 let! tyTag = str path "type" fs
                 let! cls = str path "classification" fs
 
-                let! ty =
+                let! _ =
                     match ColumnType.ofTag tyTag with
                     | Some ty -> Ok ty
                     | None -> Error(WireError.UnknownColumnType(path + ".type", tyTag, ColumnType.allTags))
 
+                let! field =
+                    JObj(
+                        [ "name", JStr name; "type", JStr tyTag ]
+                        @ (fs |> List.filter (fun (k, _) -> List.contains k metadataMembers))
+                    )
+                    |> ColumnCodec.decodeField
+                    |> Result.mapError (fun e -> WireError.BadField(path, ColumnCodec.errorString e))
+
                 return
                     NodeKind.Column
-                        { Name = name
+                        { Field = field
                           Physical = physical
-                          Type = ty
                           Classification = cls }
             }
         | "join" ->

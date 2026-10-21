@@ -33,7 +33,7 @@ module SqlServer =
         | BoolType -> "bit"
         | StringType -> "nvarchar(max)"
         | DateType -> "date"
-        | TimestampType -> "datetime2(0)"
+        | TimestampType _ -> "datetime2(0)"
         | DecimalType -> "decimal(38, 10)"
 
     /// The other direction: the column type an engine type name reads as, ignoring its length,
@@ -61,7 +61,7 @@ module SqlServer =
         | "date" -> Some DateType
         | "datetime2"
         | "datetime"
-        | "smalldatetime" -> Some TimestampType
+        | "smalldatetime" -> Some(TimestampType TimeUnit.Seconds)
         | "decimal"
         | "numeric"
         | "money"
@@ -158,7 +158,7 @@ module SqlServer =
             | BoolType
             | StringType
             | DateType
-            | TimestampType
+            | TimestampType _
             | DecimalType -> None
         | Construct.Cast _ -> Some "T-SQL's CAST coerces where the reference refuses"
         | Construct.Rounding _ ->
@@ -231,7 +231,7 @@ module SqlServer =
             | BoolType
             | StringType
             | DateType
-            | TimestampType -> "SUM(" + arg + ")"
+            | TimestampType _ -> "SUM(" + arg + ")"
         // AVG over int is an int in T-SQL; the reference's mean is a float.
         | Mean -> "AVG(CAST(" + arg + " AS float))"
         | Min
@@ -246,7 +246,7 @@ module SqlServer =
             | DecimalType
             | StringType
             | DateType
-            | TimestampType -> name + "(" + arg + ")"
+            | TimestampType _ -> name + "(" + arg + ")"
         | Median
         | StdDev
         | First
@@ -358,7 +358,7 @@ module SqlServer =
             | StringType, (:? string as s) -> Ok(Str s)
             | DateType, (:? DateTime as d) -> Ok(Date(d.ToString(dateFormat, CultureInfo.InvariantCulture)))
             | DateType, (:? DateOnly as d) -> Ok(Date(d.ToString(dateFormat, CultureInfo.InvariantCulture)))
-            | TimestampType, (:? DateTime as d) ->
+            | TimestampType _, (:? DateTime as d) ->
                 Ok(Timestamp(d.ToString(timestampFormat, CultureInfo.InvariantCulture)))
             | DecimalType, (:? decimal as d) ->
                 match Cell.decimal (d.ToString(CultureInfo.InvariantCulture)) with

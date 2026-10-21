@@ -794,6 +794,7 @@ module Policy =
         | Not x -> Not(go x)
         | IsNull x -> IsNull(go x)
         | Cast(ty, x) -> Cast(ty, go x)
+        | Convert(x, u) -> Convert(go x, u)
         | Rounded(x, r) -> Rounded(go x, r)
         | InParam(x, n) -> InParam(go x, n)
         | Coalesce xs -> Coalesce(List.map go xs)

@@ -18,7 +18,7 @@ let private types =
       BoolType
       StringType
       DateType
-      TimestampType
+      (TimestampType TimeUnit.Seconds)
       DecimalType ]
 
 let private column (id: string) (r: Rng.T) : ModelNode * Rng.T =
@@ -26,12 +26,7 @@ let private column (id: string) (r: Rng.T) : ModelNode * Rng.T =
     let cls, r = Rng.choose [ "public"; "personal" ] r
 
     { Id = id
-      Kind =
-        NodeKind.Column
-            { Name = "col_" + id
-              Physical = "COL_" + id
-              Type = ty
-              Classification = cls }
+      Kind = NodeKind.Column(ColumnSpec.create ("col_" + id) ("COL_" + id) ty cls)
       Children = [] },
     r
 
@@ -167,7 +162,7 @@ let genOp (rng: Rng.T) : ModelOp * Rng.T =
             match ModelNode.tryFind at sample.Root with
             | Some n ->
                 match n.Kind with
-                | NodeKind.Column c -> NodeKind.Column { c with Name = c.Name + "_renamed" }
+                | NodeKind.Column c -> NodeKind.Column(ColumnSpec.rename (c.Name + "_renamed") c)
                 | NodeKind.Limit l -> NodeKind.Limit { l with MaxRows = l.MaxRows + v }
                 | other -> other
             | None -> NodeKind.Source { Name = "s"; Fingerprint = None }

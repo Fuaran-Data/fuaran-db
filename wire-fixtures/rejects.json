@@ -88,5 +88,11 @@
     "as": "op",
     "input": "{\"$type\":\"amend\",\"id\":\"l\",\"kind\":{\"$type\":\"limit\",\"id\":\"l\",\"maxRows\":5,\"name\":\"x\"}}",
     "code": "DB-WIRE-UNKNOWN-FIELD"
+  },
+  {
+    "name": "column-unit-unreadable",
+    "as": "node",
+    "input": "{\"$type\":\"column\",\"classification\":\"public\",\"id\":\"c:x\",\"name\":\"w\",\"physical\":\"W\",\"type\":\"float\",\"unit\":\"furlong\"}",
+    "code": "DB-WIRE-BAD-FIELD"
   }
 ]

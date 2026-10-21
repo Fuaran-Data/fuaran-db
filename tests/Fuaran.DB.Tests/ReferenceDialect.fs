@@ -102,7 +102,7 @@ let rec private toExpr (parameters: Parameter list) (s: Scalar) : ColExpr =
     | Scalar.InList(x, items) -> InList(go x, items |> List.map go)
 
 let private index (schema: Schema) (alias: string) =
-    schema |> List.findIndex (fun (n, _) -> n = alias)
+    schema |> List.findIndex (fun f -> f.Name = alias)
 
 let private traverse (f: 'a -> Result<'b, 'e>) (xs: 'a list) : Result<'b list, 'e> =
     let rec go acc =
@@ -129,7 +129,7 @@ let rec private run
     let go = run tables parameters nullsFirst keylessAlwaysRow
 
     let schemaOf (outputs: Output list) =
-        outputs |> List.map (fun o -> o.Alias, o.Type)
+        outputs |> List.map (fun o -> Field.create o.Alias o.Type)
 
     match r with
     | Relation.Scan(table, columns) ->
@@ -139,7 +139,8 @@ let rec private run
             let cells =
                 columns
                 |> List.map (fun (physical, _) ->
-                    (t.Columns |> List.find (fun c -> c.Name = physical)).Cells |> List.toArray)
+                    Column.toCells (t.Columns |> List.find (fun c -> c.Name = physical))
+                    |> List.toArray)
 
             Ok
                 { Schema = columns |> List.map snd |> schemaOf
@@ -230,7 +231,7 @@ let rec private run
                 aggregates
                 |> traverse (fun (fn, a, _) ->
                     let i = index rows.Schema a
-                    DataFrame.aggregateCells fn (snd rows.Schema[i]) (members |> List.map (fun row -> row[i])))
+                    DataFrame.aggregateCells fn rows.Schema[i].Type (members |> List.map (fun row -> row[i])))
                 |> Result.map (fun cells -> keyCells @ cells |> List.toArray))
             |> Result.map (fun out ->
                 { Schema =

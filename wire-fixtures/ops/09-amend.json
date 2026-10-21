@@ -1,0 +1,1 @@
+{"$type":"amend","id":"c:orders.revenue","kind":{"$type":"column","classification":"public","description":"The order's revenue, net of discounts.","label":"Revenue","name":"revenue","physical":"REVENUE","type":"decimal","unit":"[GBP]"}}

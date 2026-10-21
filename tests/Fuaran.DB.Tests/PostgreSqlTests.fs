@@ -93,7 +93,7 @@ let private dbType (t: ColumnType) : NpgsqlDbType =
     | BoolType -> NpgsqlDbType.Boolean
     | StringType -> NpgsqlDbType.Text
     | DateType -> NpgsqlDbType.Date
-    | TimestampType -> NpgsqlDbType.Timestamp
+    | TimestampType _ -> NpgsqlDbType.Timestamp
     | DecimalType -> NpgsqlDbType.Numeric
 
 /// A positional parameter: `$n` is the n-th parameter added.
@@ -118,12 +118,12 @@ let pgHost (conn: NpgsqlConnection) : Host =
             try
                 for KeyValue(name, t) in tables do
                     nonQuery conn (PostgreSql.dropTable name)
-                    nonQuery conn (PostgreSql.createTable name t.Schema)
-                    let insert = PostgreSql.insertRow name (t.Schema |> List.map fst)
+                    nonQuery conn (PostgreSql.createTable name (t.Schema |> List.map (fun f -> f.Name, f.Type)))
+                    let insert = PostgreSql.insertRow name (t.Schema |> List.map _.Name)
 
                     for i in 0 .. Table.rowCount t - 1 do
                         use cmd = new NpgsqlCommand(insert, conn)
-                        t.Columns |> List.iter (fun c -> addParameter cmd c.Type (List.item i c.Cells))
+                        t.Columns |> List.iter (fun c -> addParameter cmd c.Type (Column.cell i c))
                         cmd.ExecuteNonQuery() |> ignore
 
                 Ok()
@@ -243,7 +243,7 @@ let private reencodingHost (f: string -> string) : Host =
             { t with
                 Columns =
                     t.Columns
-                    |> List.map (fun c -> Column.create c.Name c.Type (c.Cells |> List.map cell)) })
+                    |> List.map (fun c -> Sample.column c.Name c.Type ((Column.toCells c) |> List.map cell)) })
 
     { SqlServerTests.memoryHost with
         Execute =
@@ -322,7 +322,11 @@ let tests =
                   let spelled = float (sign x) * floor (abs x + 0.5)
 
                   Expect.equal
-                      (DataFrame.evalExprInRow Map.empty [ "x", FloatType ] [ Float x ] (ApplyFn(Round, [ Col "x" ])))
+                      (DataFrame.evalExprInRow
+                          Map.empty
+                          (Sample.fields [ "x", FloatType ])
+                          [ Float x ]
+                          (ApplyFn(Round, [ Col "x" ])))
                       (Ok(Float spelled))
                       (x.ToString "R")
 
@@ -334,13 +338,18 @@ let tests =
                     BoolType
                     StringType
                     DateType
-                    TimestampType
+                    (TimestampType TimeUnit.Seconds)
                     DecimalType ] do
                   Expect.equal (PostgreSql.columnType (PostgreSql.mapType t)) (Some t) (ColumnType.tag t)
 
               Expect.equal (PostgreSql.columnType "character varying(20)") (Some StringType) "varchar"
               Expect.equal (PostgreSql.columnType "NUMERIC(18,2)") (Some DecimalType) "numeric"
-              Expect.equal (PostgreSql.columnType "timestamp(3) without time zone") (Some TimestampType) "timestamp"
+
+              Expect.equal
+                  (PostgreSql.columnType "timestamp(3) without time zone")
+                  (Some(TimestampType TimeUnit.Seconds))
+                  "timestamp"
+
               Expect.equal (PostgreSql.columnType "bigint") None "bigint has no column"
               Expect.equal (PostgreSql.columnType "timestamp with time zone") None "an offset"
               Expect.equal (PostgreSql.columnType "timestamptz") None "an offset, abbreviated"
@@ -368,7 +377,7 @@ let tests =
               Expect.equal (PostgreSql.decodeCell DateType (box (DateTime(2026, 6, 2)))) (Ok(Date "2026-06-02")) "date"
 
               Expect.equal
-                  (PostgreSql.decodeCell TimestampType (box (DateTime(2026, 6, 2, 9, 30, 0))))
+                  (PostgreSql.decodeCell (TimestampType TimeUnit.Seconds) (box (DateTime(2026, 6, 2, 9, 30, 0))))
                   (Ok(Timestamp "2026-06-02T09:30:00Z"))
                   "timestamp"
 

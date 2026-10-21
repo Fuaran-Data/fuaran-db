@@ -433,19 +433,26 @@ module Session =
               Some(Recorded.Recorded rows),
               Some split,
               Some(Outcome.Finished(_, ResultDigest.Plain recorded, _)) ->
-                let columns =
-                    st.Columns
-                    |> List.mapi (fun j (name, ty) -> Column.create name ty (rows |> List.map (List.item j)))
-
+                // A captured cell its column's type cannot hold is refused as the table's validation
+                // would refuse it, never thrown.
                 let table =
-                    { Schema = st.Columns
-                      Columns = columns }
+                    st.Columns
+                    |> List.mapi (fun j (name, ty) -> Column.ofCells name ty (rows |> List.map (List.item j)))
+                    |> List.fold
+                        (fun acc c -> acc |> Result.bind (fun cs -> c |> Result.map (fun c -> c :: cs)))
+                        (Ok [])
+                    |> Result.map (fun columns ->
+                        { Schema = st.Columns |> List.map (fun (name, ty) -> Field.create name ty)
+                          Columns = List.rev columns })
 
                 let refuse name = Error(EvalError.UnresolvedSource name)
 
-                match Table.validate table with
+                match
+                    table
+                    |> Result.bind (fun table -> Table.validate table |> Result.map (fun () -> table))
+                with
                 | Error e -> ReplayVerdict.Unevaluable(ColumnCodec.errorString e)
-                | Ok() ->
+                | Ok table ->
                     match DataFrame.evalPipelineWithInEnv refuse Map.empty split.Suffix table with
                     | Error e -> ReplayVerdict.Unevaluable(evalCode e)
                     | Ok final ->

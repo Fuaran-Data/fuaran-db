@@ -91,7 +91,7 @@ let private sqlType (t: ColumnType) : SqlDbType =
     | BoolType -> SqlDbType.Bit
     | StringType -> SqlDbType.NVarChar
     | DateType -> SqlDbType.Date
-    | TimestampType -> SqlDbType.DateTime2
+    | TimestampType _ -> SqlDbType.DateTime2
     | DecimalType -> SqlDbType.Decimal
 
 let private addParameter (cmd: SqlCommand) (name: string) (ty: ColumnType) (value: Cell) =
@@ -99,7 +99,7 @@ let private addParameter (cmd: SqlCommand) (name: string) (ty: ColumnType) (valu
 
     match ty with
     | StringType -> p.Size <- -1
-    | TimestampType -> p.Scale <- 0uy
+    | TimestampType _ -> p.Scale <- 0uy
     | DecimalType ->
         p.Precision <- 38uy
         p.Scale <- 10uy
@@ -125,14 +125,14 @@ let sqlHost (conn: SqlConnection) : Host =
             try
                 for KeyValue(name, t) in tables do
                     nonQuery conn (SqlServer.dropTable name)
-                    nonQuery conn (SqlServer.createTable name t.Schema)
-                    let insert = SqlServer.insertRow name (t.Schema |> List.map fst)
+                    nonQuery conn (SqlServer.createTable name (t.Schema |> List.map (fun f -> f.Name, f.Type)))
+                    let insert = SqlServer.insertRow name (t.Schema |> List.map _.Name)
 
                     for i in 0 .. Table.rowCount t - 1 do
                         use cmd = new SqlCommand(insert, conn)
 
                         t.Columns
-                        |> List.iteri (fun j c -> addParameter cmd (SqlServer.marker j) c.Type (List.item i c.Cells))
+                        |> List.iteri (fun j c -> addParameter cmd (SqlServer.marker j) c.Type (Column.cell i c))
 
                         cmd.ExecuteNonQuery() |> ignore
 
@@ -280,7 +280,7 @@ let tests =
                     BoolType
                     StringType
                     DateType
-                    TimestampType
+                    (TimestampType TimeUnit.Seconds)
                     DecimalType ] do
                   Expect.equal (SqlServer.columnType (SqlServer.mapType t)) (Some t) (ColumnType.tag t)
 
@@ -301,7 +301,7 @@ let tests =
               Expect.equal (SqlServer.decodeCell DateType (box (DateTime(2026, 6, 2)))) (Ok(Date "2026-06-02")) "date"
 
               Expect.equal
-                  (SqlServer.decodeCell TimestampType (box (DateTime(2026, 6, 2, 9, 30, 0))))
+                  (SqlServer.decodeCell (TimestampType TimeUnit.Seconds) (box (DateTime(2026, 6, 2, 9, 30, 0))))
                   (Ok(Timestamp "2026-06-02T09:30:00Z"))
                   "timestamp"
 
@@ -383,10 +383,10 @@ let tests =
                                           Columns =
                                               t.Columns
                                               |> List.map (fun c ->
-                                                  Column.create
+                                                  Sample.column
                                                       c.Name
                                                       c.Type
-                                                      (c.Cells
+                                                      ((Column.toCells c)
                                                        |> List.map (fun x ->
                                                            match x with
                                                            | Str v -> Str(v.ToLowerInvariant())

@@ -13,14 +13,14 @@
       "id": "ops",
       "kind": "accept-op",
       "path": "ops",
-      "vectors": 8,
-      "description": "One op per kind: add (a leaf and a subtree), amend (a rename, a limit), retire; then an amend to a limit declaring every optional cost cap (Phase 1902), whose four fields are written only when declared; then an amend to a source declaring a row-count fingerprint (Phase 2008), whose field is written only when declared; then an amend to the model marking a classification recordable (Phase 1903), whose field is written only when it names one."
+      "vectors": 9,
+      "description": "One op per kind: add (a leaf and a subtree), amend (a rename, a limit), retire; then an amend to a limit declaring every optional cost cap (Phase 1902), whose four fields are written only when declared; then an amend to a source declaring a row-count fingerprint (Phase 2008), whose field is written only when declared; then an amend to the model marking a classification recordable (Phase 1903), whose field is written only when it names one; then an amend to a column stating a unit, a label and a description (Phase 2), in Core's field spelling, each written only when stated."
     },
     {
       "id": "rejects",
       "kind": "reject",
       "path": "rejects.json",
-      "vectors": 15,
+      "vectors": 16,
       "description": "Texts the decoder refuses, each with its code."
     },
     {

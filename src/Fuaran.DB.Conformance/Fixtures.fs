@@ -55,12 +55,7 @@ module Fixtures =
 
     let private column (id: string) (name: string) (physical: string) (ty: ColumnType) : ModelNode =
         { Id = id
-          Kind =
-            NodeKind.Column
-                { Name = name
-                  Physical = physical
-                  Type = ty
-                  Classification = "public" }
+          Kind = NodeKind.Column(ColumnSpec.create name physical ty "public")
           Children = [] }
 
     let private table (id: string) (name: string) (physical: string) (columns: ModelNode list) : ModelNode =
@@ -100,7 +95,7 @@ module Fixtures =
                           column "c:o:channel" "channel" "ORD_CHANNEL" StringType
                           column "c:o:flag" "flag" "ORD_FLAG" BoolType
                           column "c:o:day" "day" "ORD_DAY" DateType
-                          column "c:o:at" "at" "ORD_AT" TimestampType
+                          column "c:o:at" "at" "ORD_AT" (TimestampType TimeUnit.Seconds)
                           column "c:o:note" "note" "ORD_NOTE]X" StringType ]
                     table
                         "t:customers"
@@ -146,11 +141,16 @@ module Fixtures =
                         TimeoutSeconds = Some 30 }
                 Children = [] } ] }
 
-    let private tableOf (schema: Schema) (rows: Cell list list) : Table =
-        { Schema = schema
+    /// A table of `(name, type)` columns over `rows`. The seed holds only cells its columns' types
+    /// hold, so a refusal is a defect in the seed and throws.
+    let private tableOf (columns: (string * ColumnType) list) (rows: Cell list list) : Table =
+        { Schema = columns |> List.map (fun (name, ty) -> Field.create name ty)
           Columns =
-            schema
-            |> List.mapi (fun j (name, ty) -> Column.create name ty (rows |> List.map (List.item j))) }
+            columns
+            |> List.mapi (fun j (name, ty) ->
+                match Column.ofCells name ty (rows |> List.map (List.item j)) with
+                | Ok c -> c
+                | Error e -> invalidArg name (ColumnCodec.errorString e)) }
 
     let private dec (text: string) =
         Cell.decimal text |> Option.defaultValue Null
@@ -169,7 +169,7 @@ module Fixtures =
                   "channel", StringType
                   "flag", BoolType
                   "day", DateType
-                  "at", TimestampType
+                  "at", (TimestampType TimeUnit.Seconds)
                   "note", StringType ]
                 [ [ Int 1
                     Int 1

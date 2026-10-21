@@ -55,7 +55,7 @@ module StreamLaws =
                     "s",
                     { Tables =
                         [ { Name = "t"
-                            Columns = [ "a", IntType ] } ] },
+                            Columns = [ Field.create "a" IntType ] } ] },
                     (if flip = 0 then None else Some [ TableDrift.InStep "t" ]),
                     at
                 )

@@ -38,7 +38,7 @@ module PostgreSql =
         | BoolType -> "boolean"
         | StringType -> "text"
         | DateType -> "date"
-        | TimestampType -> "timestamp(0) without time zone"
+        | TimestampType _ -> "timestamp(0) without time zone"
         | DecimalType -> "numeric"
 
     let private modifiers = Regex(@"\([^)]*\)")
@@ -71,7 +71,7 @@ module PostgreSql =
         | "character varying" -> Some StringType
         | "date" -> Some DateType
         | "timestamp"
-        | "timestamp without time zone" -> Some TimestampType
+        | "timestamp without time zone" -> Some(TimestampType TimeUnit.Seconds)
         | "numeric"
         | "decimal" -> Some DecimalType
         | _ -> None
@@ -86,7 +86,7 @@ module PostgreSql =
         | FloatType
         | BoolType
         | DateType
-        | TimestampType
+        | TimestampType _
         | DecimalType -> value
 
     let private call (name: string) (args: string list) =
@@ -185,7 +185,7 @@ module PostgreSql =
             | BoolType
             | StringType
             | DateType
-            | TimestampType
+            | TimestampType _
             | DecimalType -> None
         | Construct.Cast _ -> Some "PostgreSQL's CAST coerces where the reference refuses"
         | Construct.Rounding _ ->
@@ -277,7 +277,7 @@ module PostgreSql =
             | DecimalType
             | StringType
             | DateType
-            | TimestampType -> (if fn = Min then "min(" else "max(") + arg + ")"
+            | TimestampType _ -> (if fn = Min then "min(" else "max(") + arg + ")"
         | Median
         | StdDev
         | First
@@ -380,7 +380,7 @@ module PostgreSql =
             | StringType, (:? string as s) -> Ok(Str s)
             | DateType, (:? DateOnly as d) -> Ok(Date(d.ToString(dateFormat, CultureInfo.InvariantCulture)))
             | DateType, (:? DateTime as d) -> Ok(Date(d.ToString(dateFormat, CultureInfo.InvariantCulture)))
-            | TimestampType, (:? DateTime as d) ->
+            | TimestampType _, (:? DateTime as d) ->
                 Ok(Timestamp(d.ToString(timestampFormat, CultureInfo.InvariantCulture)))
             | DecimalType, (:? decimal as d) ->
                 match Cell.decimal (d.ToString(CultureInfo.InvariantCulture)) with

@@ -122,7 +122,7 @@ module ModelRules =
         | BoolType
         | StringType
         | DateType
-        | TimestampType -> false
+        | TimestampType _ -> false
 
     let private joinRules (root: ModelNode) : Defect<string> list =
         let tableIds = Model.tables root |> List.map (fun (n, _) -> n.Id) |> Set.ofList
@@ -337,7 +337,7 @@ module ModelRules =
     /// stamps: a timestamp, a date or an int version.
     let private isChangeType (t: ColumnType) : bool =
         match t with
-        | TimestampType
+        | TimestampType _
         | DateType
         | IntType -> true
         | FloatType

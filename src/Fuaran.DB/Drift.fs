@@ -2,7 +2,8 @@ namespace Fuaran.DB
 
 open Fuaran.Core
 
-/// One table as a source reported it: its physical name and its columns with their types.
+/// One table as a source reported it: its physical name and its columns as fields, with whatever
+/// metadata the source states (a unit, a label, a description); a member it does not state is `None`.
 type ReportedTable =
     {
         /// The source's identifier for the table.
@@ -45,7 +46,8 @@ module Drift =
         "c:" + source + "." + table + "." + column
 
     /// A model seeded from a reported schema: one source, a table per reported table, a column per
-    /// reported column, each named as the source names it and classified `classification`, which
+    /// reported column, each named as the source names it, keeping the field's reported metadata (a
+    /// reported unit is the column's unit), and classified `classification`, which
     /// is the model's one declared classification until an author declares more. Relations,
     /// measures, policies and limits are authored, never inferred.
     let seed
@@ -62,13 +64,12 @@ module Drift =
                   Kind = NodeKind.Table { Name = t.Name; Physical = t.Name }
                   Children =
                     t.Columns
-                    |> List.map (fun (c, ty) ->
-                        { Id = columnId source t.Name c
+                    |> List.map (fun f ->
+                        { Id = columnId source t.Name f.Name
                           Kind =
                             NodeKind.Column
-                                { Name = c
-                                  Physical = c
-                                  Type = ty
+                                { Field = f
+                                  Physical = f.Name
                                   Classification = classification }
                           Children = [] }) })
 
@@ -83,9 +84,31 @@ module Drift =
                 Kind = NodeKind.Source { Name = source; Fingerprint = None }
                 Children = tables } ] }
 
+    /// A reported field with every metadata member it does NOT state taken from the model's field of
+    /// the same physical name: a source that reports no unit is silent about the unit, not reporting
+    /// its withdrawal, so only a STATED difference reaches the delta.
+    let private overlay (modelled: Map<string, Field>) (reported: Field) : Field =
+        match Map.tryFind reported.Name modelled with
+        | None -> reported
+        | Some m ->
+            let fill (r: 'T option) (mv: 'T option) (add: 'T -> Field -> Field) (f: Field) =
+                match r, mv with
+                | None, Some v -> add v f
+                | _ -> f
+
+            m.Ext
+            |> Map.fold
+                (fun f k v -> if f.Ext.ContainsKey k then f else Field.withExt k v f)
+                (reported
+                 |> fill reported.Unit m.Unit Field.withUnit
+                 |> fill reported.Label m.Label Field.withLabel
+                 |> fill reported.Description m.Description Field.withDescription)
+
     /// Hold one source of `model` against what that source reported. Per table, the verdict is
-    /// `Schema.diff`'s over physical names; model tables first, in model order, then the reported
-    /// tables the model does not hold. `None` when the model has no source named `source`.
+    /// `Schema.diff`'s over physical names — a retype, and (through Core's `SchemaDelta.Amended`) a
+    /// unit, label or description the source states differently from the model; a member the source
+    /// does not state is never drift. Model tables first, in model order, then the reported tables
+    /// the model does not hold. `None` when the model has no source named `source`.
     let check (model: ModelNode) (source: string) (reported: ReportedSchema) : TableDrift list option =
         model.Children
         |> List.tryFind (fun n ->
@@ -120,7 +143,9 @@ module Drift =
                     match Map.tryFind spec.Physical reportedBy with
                     | None -> TableDrift.MissingAtSource spec.Physical
                     | Some r ->
-                        let delta = Schema.diff (Model.physicalSchemaOf t) r.Columns
+                        let mine = Model.physicalSchemaOf t
+                        let byName = mine |> List.map (fun f -> f.Name, f) |> Map.ofList
+                        let delta = Schema.diff mine (r.Columns |> List.map (overlay byName))
 
                         if delta = Schema.identityDelta then
                             TableDrift.InStep spec.Physical
