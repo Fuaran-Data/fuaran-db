@@ -1,0 +1,10 @@
+{
+  "kind": "gateReads",
+  "_": "What this repository's gate reads beyond the code-shaped default (sources, tests, build and project files, the gate scripts). A commit touching only files outside the union is gate-inert, and a landing may stand on an earlier green run across it. The gate is verify.ps1 -> run.ps1: format, build, the Expecto suite, and no sweep of the tracked set. The entries are what the suite opens: the wire corpus and the dialect conformance corpus (read whole, because the manifests name their members as data), and the decision log the Substrait survey reads. Checked, not trusted: tests/Fuaran.DB.Tests/GateReadsCensusTests.fs.",
+  "reads": [
+    "DECISIONS.md",
+    "conformance/**",
+    "wire-fixtures/**"
+  ],
+  "notRead": []
+}
