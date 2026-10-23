@@ -29,6 +29,7 @@
     <Compile Include="PostgreSqlTests.fs" />
     <Compile Include="SessionTests.fs" />
     <Compile Include="FieldTests.fs" />
+    <Compile Include="GateReadsCensusTests.fs" />
     <Compile Include="Main.fs" />
   </ItemGroup>
 
