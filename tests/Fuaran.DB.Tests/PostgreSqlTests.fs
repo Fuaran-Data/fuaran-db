@@ -178,7 +178,9 @@ let pgHost (conn: NpgsqlConnection) : Host =
 let private describeEngine (conn: NpgsqlConnection) : string * string =
     use cmd =
         new NpgsqlCommand(
-            "SELECT version(), datcollate || ' (' || datlocprovider || ')' FROM pg_database WHERE datname = current_database()",
+            // `datlocprovider` is a `"char"`, which `||` cannot join to text without a cast; under the ICU
+            // provider the locale is `datlocale` (PostgreSQL 17), and `datcollate` is only the libc fallback.
+            "SELECT version(), coalesce(datlocale, datcollate) || ' (' || datlocprovider::text || '), encoding ' || pg_encoding_to_char(encoding) FROM pg_database WHERE datname = current_database()",
             conn
         )
 
@@ -220,6 +222,24 @@ let runAgainstServer (dialect: Dialect) (linguistic: bool) (connectionString: st
     finally
         NpgsqlConnection.ClearAllPools()
         nonQuery admin ("DROP DATABASE " + PostgreSql.quote database + " WITH (FORCE)")
+
+/// One line per fixture: its verdict, how many planned steps the engine ran, and where the boundary fell.
+/// The record a certification cites, so every fixture is named, not only those that differed.
+let fixtureLines (report: Report) : string list =
+    report.Fixtures
+    |> List.map (fun r ->
+        let verdict =
+            match r.Verdict with
+            | Verdict.Agreed -> "agreed"
+            | Verdict.DifferingAsPinned pin -> sprintf "differing as pinned (%A)" pin
+            | Verdict.DifferingUnexpectedly detail -> sprintf "DIFFERING UNEXPECTEDLY: %s" detail
+
+        let boundary =
+            match r.Boundary with
+            | None -> "every step lowered"
+            | Some b -> sprintf "boundary %A" b
+
+        sprintf "%s: %s; %d step(s) on the engine, %s" r.Fixture verdict r.Lowered boundary)
 
 /// The fixtures a report shows differing as the case-insensitive pin predicts.
 let private caseInsensitive (report: Report) : string list =
@@ -540,6 +560,9 @@ let tests =
 
                          printfn "conformance leg (postgresql): ARMED — engine %s, collation %s" version collation
 
+                         fixtureLines report
+                         |> List.iter (printfn "conformance (postgresql, engine, fixture): %s")
+
                          Kit.describe report
                          |> List.iter (printfn "conformance (postgresql, engine): %s")
 
@@ -552,6 +575,25 @@ let tests =
                          Expect.equal u 0 "no fixture differs unexpectedly"
                          Expect.equal (caseInsensitive report) [] "strings compare case-sensitively here"
 
+                     // The falsifier's converse (Phase 4): over the same linguistic database the certified
+                     // dialect still agrees, so it is the re-declared `COLLATE "C"` that turns the run green,
+                     // not something the database happens to share with the reference.
+                     testCase "the kit over a linguistic collation agrees for the dialect that re-declares it"
+                     <| fun _ ->
+                         let report, _, collation = runAgainstServer PostgreSql.dialect true connectionString
+
+                         let a, p, u = Kit.counts report
+
+                         printfn
+                             "conformance leg (postgresql): certified dialect over collation %s: %d agreed, %d differing as pinned, %d differing unexpectedly"
+                             collation
+                             a
+                             p
+                             u
+
+                         Expect.equal u 0 "no fixture differs unexpectedly over a linguistic database"
+                         Expect.equal (caseInsensitive report) [] "strings compare case-sensitively there too"
+
                      // The falsifier: a dialect that reads strings under the database's own collation is
                      // caught over a linguistic one.
                      testCase "the kit goes red over a linguistic collation for a dialect that does not re-declare it"
@@ -562,8 +604,17 @@ let tests =
                                  ReadValue = fun _ value -> value }
 
                          let report, _, collation = runAgainstServer broken true connectionString
-                         let _, _, u = Kit.counts report
-                         printfn "conformance leg (postgresql): falsifier over collation %s" collation
+                         let a, p, u = Kit.counts report
+
+                         printfn
+                             "conformance leg (postgresql): falsifier over collation %s: %d agreed, %d differing as pinned, %d differing unexpectedly"
+                             collation
+                             a
+                             p
+                             u
+
+                         Kit.describe report
+                         |> List.iter (printfn "conformance (postgresql, falsifier): %s")
 
                          Expect.isTrue
                              (u > 0 || not (List.isEmpty (caseInsensitive report)))

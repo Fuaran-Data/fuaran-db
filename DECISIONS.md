@@ -137,8 +137,8 @@ provider. Six rulings, each with what would reopen it.
      strings by code point, and the reference orders them by UTF-16 code unit. The two part only where an
      astral character meets one in U+E000 to U+FFFF. The pin predicts the reference over seed and bindings
      re-encoded so that code-unit order is code-point order. Fixture: `difference-code-point-order` (3 by
-     code unit, 2 by code point). SQL Server agreed on it (ruling 6). PostgreSQL is predicted to differ as
-     pinned, which no run has measured.
+     code unit, 2 by code point). SQL Server agreed on it (ruling 6). PostgreSQL differs as pinned,
+     measured on the engine (ruling 5).
    - **Null ordering** is *spelled*. **Integer division**, **decimal scale on division** and **date
      truncation** are *refused*. **Float summation order** is *declared*. **A pushed sum's width** is
      *decoded*: PostgreSQL's `sum` and `count` answer a `bigint`, and `decodeCell` narrows it, refusing a
@@ -153,24 +153,57 @@ provider. Six rulings, each with what would reopen it.
    that loads the new seed gains a table no earlier fixture reads. The set is additive, and the 0.1.0 slot
    is an untagged draft, so the kit's stamp, which is the assembly version, rides it. A released kit would
    take a new version for the same change. *Reopen* if a seed change ever alters an existing table.
-5. **The PostgreSQL leg is armed by configuration and Pending without it.** With `FUARAN_DB_POSTGRESQL`
-   set to a connection string, the suite does the following:
+5. **The PostgreSQL leg is armed by configuration and Pending without it, and its first run is recorded
+   (amended 2026-10-23, data#4).** With `FUARAN_DB_POSTGRESQL` set to a connection string, the suite does
+   the following:
    - It creates a database (`TEMPLATE template0`, UTF-8), seeds it, runs the kit, fails on any unexpected
-     difference or any case-insensitive verdict, and drops the database (`WITH (FORCE)`).
+     difference or any case-insensitive verdict, and drops the database (`WITH (FORCE)`). It prints one
+     line per fixture: the verdict, the steps the engine ran and where the boundary fell.
    - It runs the falsifier: a dialect that reads strings bare, over a database created under the ICU root
      locale. That run must go red.
+   - It runs this dialect over that same ICU database, where it must still agree. That is the falsifier's
+     converse: it shows the `COLLATE "C"` read is what turns the run green, not an order the database
+     happens to share with the reference.
 
-   Requirements: PostgreSQL 11 for `starts_with`, 13 for the forced drop, and 15 for the falsifier's ICU
-   database. **No PostgreSQL run has been made.** This machine has no PostgreSQL and no container runtime,
-   and the phase's engine task is deferred to an operator decision:
-   - **A:** install PostgreSQL, or run it in a container elsewhere, set `FUARAN_DB_POSTGRESQL`, and record
-     the run here.
-   - **B:** accept the in-memory run as the dialect's evidence until a host certifies it.
+   Requirements: PostgreSQL 11 for `starts_with`, 13 for the forced drop, and 15 for the ICU database.
 
-   The in-memory run lowers all 64 fixtures through this dialect. It proves where each boundary falls and
-   that the statement's form, evaluated with the reference's semantics, agrees (64 of 64). It never
-   executes PostgreSQL's text. So it proves nothing of the spelling, the type map, the decoding, or any
-   semantic ruling 2 claims for the engine.
+   **The recorded run.** PostgreSQL 17.11 (`PostgreSQL 17.11 on x86_64-windows, compiled by
+   msvc-19.44.35229, 64-bit`), from the EDB installer (`winget install PostgreSQL.PostgreSQL.17 --version
+   17.11-5`), as a local Windows service on an ARM64 machine, so the x86-64 server runs under emulation.
+   The server's default databases are UTF-8 with the libc collation `English_United Kingdom.1252`, and the
+   run's database inherits it.
+   - **Before any fix:** 64 fixtures. 63 agreed, 1 differing as pinned, 0 differing unexpectedly.
+   - **After:** the same, because nothing differed unexpectedly and the dialect was not changed. The only
+     fix was in the suite's host. Its engine description joined `datlocprovider`, a `"char"`, with `||`.
+     PostgreSQL refuses that (`42725`, operator is not unique) before the kit runs, so the leg had never
+     reached the kit.
+   - **The differences, with their dispositions:**
+     - `difference-code-point-order` differs as pinned (`CodePointOrder`), as ruling 3 predicted. It is
+       the one fixture whose verdict differs from SQL Server's, and the pin stays.
+     - `difference-collation-case` and `difference-collation-order` agree, so the spelled `COLLATE "C"`
+       holds on the engine. SQL Server shows both as `CaseInsensitiveCollation`.
+     - The other 61 fixtures agree, including the ones that exercise ruling 2 on the engine:
+       - `filter-round`, the `sign(x) * floor(abs(x) + 0.5)` formula.
+       - `reach-replace`, `reach-contains`, `reach-starts-with` and `reach-ends-with`, the four
+         constructs SQL Server refuses.
+       - `sum-int-overflow`, the `bigint` narrowing.
+       - The typed seed, which binds and decodes every column type.
+
+       Of the 64, 45 run at least one planned step on the engine and 19 stop at a refusal at step 1. Those
+       19 still scan and decode the source there.
+   - **ICU root locale (`und`):** this dialect gives 63 agreed, 1 differing as pinned, 0 differing
+     unexpectedly. The falsifier gives the same counts, with `difference-collation-order` differing as
+     `CaseInsensitiveCollation`, so it is red, as required.
+   - **The falsifier over the libc database as well** was probed once and not kept as a test: 62 agreed and
+     2 differing as pinned (`CaseInsensitiveCollation` on `difference-collation-order`, `CodePointOrder` on
+     `difference-code-point-order`). So the bare read is wrong under the server's default locale too, not
+     only under ICU.
+   - No conformance database survived the runs.
+
+   No difference stays open. Nothing in the `Dialect` seam, the kit or its fixtures changed, so
+   `STABILITY.md` is untouched and every fixture is byte-identical. *Reopen* a mapping on the first
+   unexpected difference a later armed run reports, including one on another server version or locale.
+   The in-memory run still lowers all 64 fixtures through this dialect and agrees on all 64.
 6. **The first dialect's recorded run, repeated after the seam change.** SQL Server 2025 LocalDB,
    17.0.4025.3 (Express Edition, 64-bit), collation `SQL_Latin1_General_CP1_CI_AS`.
    - **Before**, on `0f8ffbe`: 62 fixtures. 61 agreed, 1 differing as pinned, 0 differing unexpectedly.
@@ -179,6 +212,11 @@ provider. Six rulings, each with what would reopen it.
      (`CaseInsensitiveCollation`), and the new `difference-code-point-order` agreed.
 
    The falsifier went red as required both times.
+   - **Again on 2026-10-23 (data#4)**, in the same suite run as ruling 5's PostgreSQL leg, on the same
+     LocalDB: 64 fixtures, 62 agreed, 2 differing as pinned, 0 differing unexpectedly, the falsifier red,
+     and the in-memory legs of both dialects at 64 of 64. On this ARM64 machine the `(localdb)\` alias
+     fails, because the client cannot load the x64 `SQLUserInstance.dll`. The leg connects through the
+     instance's named pipe (`sqllocaldb info`) with `Encrypt=false`.
 
 ## 2026-10-12 — D10: the model projected per peer (Phase 1907)
 

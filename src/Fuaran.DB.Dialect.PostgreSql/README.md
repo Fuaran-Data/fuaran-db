@@ -88,23 +88,34 @@ reference evaluator. The conformance kit has a fixture that reaches each one.
 
 ## Every difference it pins
 
-| Difference | How it is pinned | Fixture |
-|---|---|---|
-| Collation and case | Spelled: strings are read under `C`, so they compare case-sensitively and by code point. The armed leg requires that no fixture differ as the case-insensitive pin predicts. | `difference-collation-case`, `difference-collation-order` |
-| Code point order | Declared: under `C`, strings order by code point, where the reference orders them by UTF-16 code unit. They part only where a character beyond the Basic Multilingual Plane meets one in U+E000 to U+FFFF. The kit accepts the reference's answer over strings re-encoded to code-point order (`CodePointOrder`). | `difference-code-point-order` |
-| Null ordering in `ORDER BY` | Spelled: every page key is `NULLS LAST`. | `difference-null-ordering-asc`, `-desc` |
-| Integer division | Refused: `Div` and `Mod` run locally. | `difference-integer-division` |
-| Float summation order | Declared: a float `Sum` or `Mean` may add in the engine's order. | `difference-float-summation-order` |
-| Decimal scale on division | Refused: `Div`, `Quotient` and `Rounded` run locally. | `difference-decimal-scale-on-division` |
-| Date truncation | Refused: `DatePart` and `DateDiffDays` run locally. | `difference-date-truncation` |
-| The integer width of a pushed `Sum` | Decoded: the engine answers a `bigint`, and `decodeCell` refuses it past int32 with the reference's own refusal. | `sum-int-overflow` |
+The last column is what the recorded engine run measured (PostgreSQL 17.11, `DECISIONS.md` D11.5).
+
+| Difference | How it is pinned | Fixture | On the engine |
+|---|---|---|---|
+| Collation and case | Spelled: strings are read under `C`, so they compare case-sensitively and by code point. The armed leg requires that no fixture differ as the case-insensitive pin predicts. | `difference-collation-case`, `difference-collation-order` | agreed, under a libc database and an ICU one |
+| Code point order | Declared: under `C`, strings order by code point, where the reference orders them by UTF-16 code unit. They part only where a character beyond the Basic Multilingual Plane meets one in U+E000 to U+FFFF. The kit accepts the reference's answer over strings re-encoded to code-point order (`CodePointOrder`). | `difference-code-point-order` | differing as pinned (`CodePointOrder`), the one fixture that does |
+| Null ordering in `ORDER BY` | Spelled: every page key is `NULLS LAST`. | `difference-null-ordering-asc`, `-desc` | agreed |
+| Integer division | Refused: `Div` and `Mod` run locally. | `difference-integer-division` | agreed, boundary at the refusal |
+| Float summation order | Declared: a float `Sum` or `Mean` may add in the engine's order. | `difference-float-summation-order` | agreed |
+| Decimal scale on division | Refused: `Div`, `Quotient` and `Rounded` run locally. | `difference-decimal-scale-on-division` | agreed, boundary at the refusal |
+| Date truncation | Refused: `DatePart` and `DateDiffDays` run locally. | `difference-date-truncation` | agreed, boundary at the refusal |
+| The integer width of a pushed `Sum` | Decoded: the engine answers a `bigint`, and `decodeCell` refuses it past int32 with the reference's own refusal. | `sum-int-overflow` | agreed |
 
 ## Certification
 
 `Fuaran.DB.Conformance` runs its fixtures through this dialect and a host's executor, and reports each one as
 agreed, differing as pinned, or differing unexpectedly. When `FUARAN_DB_POSTGRESQL` holds a connection
 string, the repository's suite runs the kit against that server. It creates a UTF-8 database from
-`template0` for the run and drops it afterwards, which needs PostgreSQL 13. It also runs a falsifier over
-a database under the ICU root locale, which needs PostgreSQL 15. When the variable is not set, the suite
-reports the leg as Pending. No engine run has been recorded yet. The in-memory run checks the provider's
-lowering and the form, but it never executes this dialect's text.
+`template0` for the run and drops it afterwards, which needs PostgreSQL 13. It runs the falsifier, a dialect
+that reads strings bare, over a database under the ICU root locale, which needs PostgreSQL 15, and runs this
+dialect over that same database, where it must still agree. When the variable is not set, the suite reports
+the leg as Pending.
+
+**The recorded run** (`DECISIONS.md` D11.5) was made on PostgreSQL 17.11 (x86-64 build, under emulation on
+ARM64 Windows), in a UTF-8 database under the libc collation `English_United Kingdom.1252`. Of 64 fixtures,
+63 agreed, 1 differed as pinned (`difference-code-point-order`) and 0 differed unexpectedly, before any
+change to this dialect, which therefore needed none. Over the ICU root locale this dialect also gave 63,
+1 and 0, and the falsifier went red there on `difference-collation-order`. That run covers what the
+in-memory run cannot: the spelling, the type map in both directions, result decoding, the `COLLATE "C"`
+read, the `Round` formula (`filter-round`), and the four constructs SQL Server refuses (`reach-replace`,
+`reach-contains`, `reach-starts-with`, `reach-ends-with`).
