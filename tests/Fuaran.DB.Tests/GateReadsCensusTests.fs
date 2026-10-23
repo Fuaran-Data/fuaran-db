@@ -188,12 +188,16 @@ let census (sources: (string * string) list) (candidates: string list) : (string
 let private skippedDirs =
     set [ ".git"; "bin"; "obj"; ".vs"; "node_modules"; "TestResults" ]
 
+/// Every file under the root but git's own: `.git` is a directory in a clone and a FILE in a linked
+/// worktree, and in neither is it something a commit can change.
 let private files =
     lazy
         (let root = repoRoot.Value
 
          let rec walk (d: string) : string list =
-             [ for f in Directory.GetFiles d -> Path.GetRelativePath(root, f).Replace('\\', '/')
+             [ for f in Directory.GetFiles d do
+                   if Path.GetFileName f <> ".git" then
+                       yield Path.GetRelativePath(root, f).Replace('\\', '/')
                for sub in Directory.GetDirectories d do
                    if not (skippedDirs.Contains(Path.GetFileName sub)) then
                        yield! walk sub ]
