@@ -124,8 +124,8 @@ let tests =
               let mapped, pinned, unmappable =
                   count "mapped" table, count "pinned" table, count "unmappable" table
 
-              Expect.equal (mapped, pinned, unmappable) (34, 23, 1) "mapped, pinned, unmappable"
-              Expect.equal (mapped + pinned + unmappable) 58 "the declared subset as counted"
+              Expect.equal (mapped, pinned, unmappable) (34, 27, 1) "mapped, pinned, unmappable"
+              Expect.equal (mapped + pinned + unmappable) 62 "the declared subset as counted"
 
           testCase "the rows outside the subset are the exclusions D4.4 names"
           <| fun _ ->

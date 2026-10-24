@@ -564,6 +564,10 @@ module Fixtures =
           f IndexOf "reach-index-of" [ Col "channel"; str "e" ]
           f Least "reach-least" [ Col "qty"; Col "cust" ]
           f Greatest "reach-greatest" [ Col "qty"; Col "cust" ]
+          f Pow "reach-pow" [ Col "price"; int 2 ]
+          f Exp "reach-exp" [ Col "price" ]
+          f Ln "reach-ln" [ Binary(Sub, Col "price", float 8.0) ]
+          f Log10 "reach-log10" [ Col "price" ]
           op Mod "reach-mod" (Col "qty") (int 3)
           op Contains "reach-contains" (Col "channel") (str "e")
           op StartsWith "reach-starts-with" (Col "channel") (str "w")

@@ -240,3 +240,15 @@ slot.
 - **Additive — drift and the AI surface**: seeding keeps a reported field's metadata; `Drift.check` reports
   a unit, label or description the source states differently through `SchemaDelta.Amended`, and never one
   it does not state; the `tables` read tool names a column's unit, label and description where stated.
+
+Riding the draft (2026-10-24), on the same terms: the pins move to Core 0.40.3 and Compute 0.41.0
+(DECISIONS.md D12, the amendment).
+
+- **Breaking — the pins move to `Fuaran.Core.*` 0.40.3 and `Fuaran.Compute.DataFrame` 0.41.0.** Compute's
+  `ScalarFn`, which `Construct.Function` and `Scalar.Function` carry, gains `Pow`, `Exp`, `Ln` and `Log10`,
+  so an exhaustive match over a construct breaks. The law families answer Core 0.40's `LawResult`, which
+  carries `Family`, `Kind`, `Evidence` and `Reached`.
+- **The posture, tightened — both dialects refuse `Pow`, `Exp`, `Ln` and `Log10` by name.** A pipeline
+  using one lowers the prefix before it and evaluates the rest locally.
+- **Additive — the conformance set**: four fixtures, `reach-pow`, `reach-exp`, `reach-ln` and
+  `reach-log10`, take the set to 68. Every existing fixture file keeps its bytes.

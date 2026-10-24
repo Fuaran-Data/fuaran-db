@@ -42,7 +42,7 @@ type Session =
     /// The record folded.
     member s.State = s.state
     /// The record's head: the last record's hash, `""` before the first.
-    member s.Head = OpStream.head s.records
+    member s.Head = OpStream.head StreamConfig.canonical s.records
 
 /// The account a record gives of one request — answered from the stream alone, with no database.
 type Account =
@@ -98,7 +98,7 @@ module Session =
             (fun acc op ->
                 acc
                 |> Result.bind (fun (cur: Session) ->
-                    OpStream.append SessionWire.hashFn SessionWire.streamWitness cur.actor op cur.state cur.records
+                    OpStream.append SessionWire.stream cur.actor op cur.state cur.records
                     |> Result.map (fun (state, records) ->
                         { cur with
                             state = state

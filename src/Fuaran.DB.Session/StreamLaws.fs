@@ -140,7 +140,7 @@ module StreamLaws =
         | SessionRejection.RowsMismatch _ -> text <> ""
 
     let private rowsText (rows: Cell list list) : string =
-        Canon.render (JArr(rows |> List.map (fun r -> JArr(r |> List.map SessionWire.cellJson))))
+        Canonical.write Rendering.CrossHost (JArr(rows |> List.map (fun r -> JArr(r |> List.map SessionWire.cellJson))))
 
     let private rowsOf (text: string) : Result<Cell list list, string> =
         match Json.parse text with

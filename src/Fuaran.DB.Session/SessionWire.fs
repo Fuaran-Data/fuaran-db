@@ -46,14 +46,14 @@ module SessionWire =
     /// A cell as a typed object. Every payload is text, so a float keeps its exact canonical spelling.
     let cellJson (c: Cell) : JVal =
         match c with
-        | Int v -> Canon.typed "int" [ "v", JInt v ]
-        | Float v -> Canon.typed "float" [ "v", JStr(Canon.canonicalFloat v) ]
-        | Bool v -> Canon.typed "bool" [ "v", JBool v ]
-        | Str v -> Canon.typed "string" [ "v", JStr v ]
-        | Date v -> Canon.typed "date" [ "v", JStr v ]
-        | Timestamp v -> Canon.typed "timestamp" [ "v", JStr v ]
-        | Decimal v -> Canon.typed "decimal" [ "v", JStr v ]
-        | Null -> Canon.typed "null" []
+        | Int v -> Canonical.typed "int" [ "v", JInt v ]
+        | Float v -> Canonical.typed "float" [ "v", JStr(FloatLayout.canonical v) ]
+        | Bool v -> Canonical.typed "bool" [ "v", JBool v ]
+        | Str v -> Canonical.typed "string" [ "v", JStr v ]
+        | Date v -> Canonical.typed "date" [ "v", JStr v ]
+        | Timestamp v -> Canonical.typed "timestamp" [ "v", JStr v ]
+        | Decimal v -> Canonical.typed "decimal" [ "v", JStr v ]
+        | Null -> Canonical.typed "null" []
 
     let private typedPair (name: string, ty: ColumnType) =
         JObj [ "name", JStr name; "type", JStr(ColumnType.tag ty) ]
@@ -88,7 +88,7 @@ module SessionWire =
     let private ruleJson (r: PolicyRule) : JVal =
         match r with
         | PolicyRule.ColumnsGranted cols ->
-            Canon.typed
+            Canonical.typed
                 "columnsGranted"
                 [ "columns",
                   JArr(
@@ -96,20 +96,20 @@ module SessionWire =
                       |> List.map (fun (c, l) -> JObj [ "column", columnRefJson c; "level", JStr(levelTag l) ])
                   ) ]
         | PolicyRule.RowPolicyApplied(table, policy, at, predicate) ->
-            Canon.typed
+            Canonical.typed
                 "rowPolicyApplied"
                 [ "table", JStr table
                   "policy", JStr policy
                   "at", JInt at
                   "predicate", DataFrameCodec.encodeExpr predicate ]
         | PolicyRule.GroupFloorApplied(step, floor, cols) ->
-            Canon.typed
+            Canonical.typed
                 "groupFloorApplied"
                 [ "step", JInt step
                   "floor", JInt floor
                   "columns", JArr(cols |> List.map columnRefJson) ]
         | PolicyRule.CostAdmitted(rows, joins, keys, limits) ->
-            Canon.typed
+            Canonical.typed
                 "costAdmitted"
                 [ "rows", JInt rows
                   "joins", JInt joins
@@ -126,9 +126,9 @@ module SessionWire =
 
     let private readingJson (r: FingerprintReading) : JVal =
         match r with
-        | FingerprintReading.Counter position -> Canon.typed "counter" [ "position", JStr position ]
+        | FingerprintReading.Counter position -> Canonical.typed "counter" [ "position", JStr position ]
         | FingerprintReading.Tables rows ->
-            Canon.typed
+            Canonical.typed
                 "tables"
                 [ "tables",
                   JArr(
@@ -140,17 +140,17 @@ module SessionWire =
                                 "maxChange", cellJson t.MaxChange ])
                   ) ]
         | FingerprintReading.File f ->
-            Canon.typed
+            Canonical.typed
                 "file"
                 ([ "size", int64Json f.Size; "modifiedUtcTicks", int64Json f.ModifiedUtcTicks ]
                  @ optional "contentHash" (f.ContentHash |> Option.map JStr))
 
     let private verdictJson (v: FingerprintVerdict) : JVal =
         match v with
-        | FingerprintVerdict.Changed what -> Canon.typed "changed" [ "what", strs what ]
-        | FingerprintVerdict.Unchanged -> Canon.typed "unchanged" []
-        | FingerprintVerdict.NoChangeSeen misses -> Canon.typed "noChangeSeen" [ "misses", strs misses ]
-        | FingerprintVerdict.Incomparable reason -> Canon.typed "incomparable" [ "reason", JStr reason ]
+        | FingerprintVerdict.Changed what -> Canonical.typed "changed" [ "what", strs what ]
+        | FingerprintVerdict.Unchanged -> Canonical.typed "unchanged" []
+        | FingerprintVerdict.NoChangeSeen misses -> Canonical.typed "noChangeSeen" [ "misses", strs misses ]
+        | FingerprintVerdict.Incomparable reason -> Canonical.typed "incomparable" [ "reason", JStr reason ]
 
     let private schemaJson (s: ReportedSchema) : JVal =
         JArr(
@@ -160,16 +160,16 @@ module SessionWire =
 
     let private driftJson (d: TableDrift) : JVal =
         match d with
-        | TableDrift.InStep t -> Canon.typed "inStep" [ "table", JStr t ]
+        | TableDrift.InStep t -> Canonical.typed "inStep" [ "table", JStr t ]
         | TableDrift.Drifted(t, delta) ->
-            Canon.typed "drifted" [ "table", JStr t; "delta", SchemaDeltaCodec.encodeJson delta ]
-        | TableDrift.MissingAtSource t -> Canon.typed "missingAtSource" [ "table", JStr t ]
-        | TableDrift.Unmodelled t -> Canon.typed "unmodelled" [ "table", JStr t ]
+            Canonical.typed "drifted" [ "table", JStr t; "delta", SchemaDeltaCodec.encodeJson delta ]
+        | TableDrift.MissingAtSource t -> Canonical.typed "missingAtSource" [ "table", JStr t ]
+        | TableDrift.Unmodelled t -> Canonical.typed "unmodelled" [ "table", JStr t ]
 
     let private digestJson (d: ResultDigest) : JVal =
         match d with
-        | ResultDigest.Plain h -> Canon.typed "plain" [ "digest", JStr h ]
-        | ResultDigest.Committed h -> Canon.typed "committed" [ "digest", JStr h ]
+        | ResultDigest.Plain h -> Canonical.typed "plain" [ "digest", JStr h ]
+        | ResultDigest.Committed h -> Canonical.typed "committed" [ "digest", JStr h ]
 
     let private statementJson (s: StatementRecord) : JVal =
         JObj(
@@ -192,7 +192,7 @@ module SessionWire =
 
         match op with
         | SessionOp.Opened h ->
-            Canon.typed
+            Canonical.typed
                 t
                 [ "session", JStr h.Session
                   "model", JStr h.Model
@@ -203,12 +203,12 @@ module SessionWire =
                   "providerVersion", JStr h.ProviderVersion
                   "at", JStr h.At ]
         | SessionOp.SchemaReported(source, schema, drift, at) ->
-            Canon.typed
+            Canonical.typed
                 t
                 ([ "source", JStr source; "schema", schemaJson schema; "at", JStr at ]
                  @ optional "drift" (drift |> Option.map (List.map driftJson >> JArr)))
         | SessionOp.Received(request, table, pipeline, redacted, at) ->
-            Canon.typed
+            Canonical.typed
                 t
                 [ "request", JStr request
                   "table", JStr table
@@ -216,7 +216,7 @@ module SessionWire =
                   "redacted", JInt redacted
                   "at", JStr at ]
         | SessionOp.Admitted(request, principal, reads, rules, pipeline, redacted) ->
-            Canon.typed
+            Canonical.typed
                 t
                 [ "request", JStr request
                   "principal", JStr principal
@@ -225,9 +225,9 @@ module SessionWire =
                   "pipeline", pipelineJson pipeline
                   "redacted", JInt redacted ]
         | SessionOp.Refused(request, principal, code) ->
-            Canon.typed t [ "request", JStr request; "principal", JStr principal; "code", JStr code ]
+            Canonical.typed t [ "request", JStr request; "principal", JStr principal; "code", JStr code ]
         | SessionOp.Lowered(request, lowered, suffix, redacted, boundary) ->
-            Canon.typed
+            Canonical.typed
                 t
                 ([ "request", JStr request
                    "lowered", JInt lowered
@@ -235,7 +235,7 @@ module SessionWire =
                    "redacted", JInt redacted ]
                  @ optional "boundary" (boundary |> Option.map JStr))
         | SessionOp.Fingerprinted(request, source, m, kind, reading, withheld, verdict, at) ->
-            Canon.typed
+            Canonical.typed
                 t
                 ([ "request", JStr request
                    "source", JStr source
@@ -246,42 +246,43 @@ module SessionWire =
                    "at", JStr at ]
                  @ optional "verdict" (verdict |> Option.map verdictJson))
         | SessionOp.Ran(request, statement, at) ->
-            Canon.typed t [ "request", JStr request; "statement", statementJson statement; "at", JStr at ]
+            Canonical.typed t [ "request", JStr request; "statement", statementJson statement; "at", JStr at ]
         | SessionOp.ValuesRecorded(request, values) ->
-            Canon.typed
+            Canonical.typed
                 t
                 [ "request", JStr request
                   "values", JArr(values |> List.map (fun (n, v) -> JObj [ "name", JStr n; "value", cellJson v ])) ]
         | SessionOp.Returned(request, rows, digest, at) ->
-            Canon.typed
+            Canonical.typed
                 t
                 [ "request", JStr request
                   "rows", JInt rows
                   "digest", digestJson digest
                   "at", JStr at ]
         | SessionOp.RowsRecorded(request, rows) ->
-            Canon.typed
+            Canonical.typed
                 t
                 [ "request", JStr request
                   "rows", JArr(rows |> List.map (fun r -> JArr(r |> List.map cellJson))) ]
         | SessionOp.Withheld(request, part, classifications) ->
-            Canon.typed
+            Canonical.typed
                 t
                 [ "request", JStr request
                   "part", JStr(partTag part)
                   "classifications", strs classifications ]
         | SessionOp.Finished(request, rows, digest, at) ->
-            Canon.typed
+            Canonical.typed
                 t
                 [ "request", JStr request
                   "rows", JInt rows
                   "digest", digestJson digest
                   "at", JStr at ]
         | SessionOp.Failed(request, code, at) ->
-            Canon.typed t [ "request", JStr request; "code", JStr code; "at", JStr at ]
+            Canonical.typed t [ "request", JStr request; "code", JStr code; "at", JStr at ]
 
     /// An op's canonical text — what the chain hashes.
-    let encodeOp (op: SessionOp) : string = Canon.render (encodeOpJson op)
+    let encodeOp (op: SessionOp) : string =
+        Canonical.write Rendering.CrossHost (encodeOpJson op)
 
     // ---- decode ----
 
@@ -340,7 +341,7 @@ module SessionWire =
                 let! s = str path "v" fs
 
                 match Double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture) with
-                | true, f when Canon.canonicalFloat f = s -> return Float f
+                | true, f when FloatLayout.canonical f = s -> return Float f
                 | _ -> return! Error(WireError.WrongShape(path + ".v", "a float in canonical text"))
             | "string"
             | "date"
@@ -892,24 +893,28 @@ module SessionWire =
           Encode = encodeOp
           Decode = fun text -> decodeOp text |> Result.mapError ModelWire.describe }
 
+    /// The session's op stream: the canonical config over the SHA-256 chain hash.
+    let stream: Stream<SessionOp, SessionState, SessionRejection> =
+        OpStream.canonical hashFn streamWitness
+
     // ---- the session as wire ----
 
     /// A session as canonical wire: Core's JSONL, one record per line, no trailing newline.
-    let write (records: OpRecord<SessionOp> list) : string = OpStream.toJsonl streamWitness records
+    let write (records: OpRecord<SessionOp> list) : string = Jsonl.write streamWitness records
 
     let private recordOf (line: JsonlLine) : Result<OpRecord<SessionOp>, JsonlFault> =
-        OpStream.Jsonl.intField "seq" line
+        Jsonl.intField "seq" line
         |> Result.bind (fun seq ->
-            OpStream.Jsonl.actorField "actor" line
+            Jsonl.actorField "actor" line
             |> Result.bind (fun actor ->
-                OpStream.Jsonl.rawField "op" line
+                Jsonl.rawField "op" line
                 |> Result.bind (fun raw ->
                     decodeOp raw
-                    |> Result.mapError (fun e -> OpStream.Jsonl.refuse line (ModelWire.describe e)))
+                    |> Result.mapError (fun e -> Jsonl.refuse line (ModelWire.describe e)))
                 |> Result.bind (fun op ->
-                    OpStream.Jsonl.stringField "prevHash" line
+                    Jsonl.stringField "prevHash" line
                     |> Result.bind (fun prevHash ->
-                        OpStream.Jsonl.stringField "hash" line
+                        Jsonl.stringField "hash" line
                         |> Result.map (fun hash ->
                             { Seq = seq
                               Actor = actor
@@ -933,14 +938,14 @@ module SessionWire =
             |> Option.map fst
             |> Option.defaultValue 0
 
-        match OpStream.Jsonl.scanRecords recordOf text with
+        match Jsonl.scanRecords recordOf text with
         | Error f when f.Line = lastLine -> Error(SessionReadFault.TornTail f)
         | Error f -> Error(SessionReadFault.Malformed f)
         | Ok records ->
-            match OpStream.firstChainBreak hashFn streamWitness records with
+            match OpStream.firstChainBreak stream records with
             | Some b -> Error(SessionReadFault.Broken b)
             | None ->
-                let head = OpStream.head records
+                let head = OpStream.head StreamConfig.canonical records
 
                 match expectedHead with
                 | Some expected when expected <> head -> Error(SessionReadFault.Rewound(expected, head))

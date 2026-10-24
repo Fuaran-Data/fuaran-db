@@ -63,7 +63,7 @@ module SessionHash =
     let private cellFields (c: Cell) : string * string =
         match c with
         | Int v -> "i", string v
-        | Float v -> "f", Canon.canonicalFloat v
+        | Float v -> "f", FloatLayout.canonical v
         | Bool v -> "b", (if v then "1" else "0")
         | Str v -> "s", v
         | Date v -> "d", v

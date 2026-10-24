@@ -483,9 +483,7 @@ let private laws (tamper: Admitted -> Transform list) (seed: int) (count: int) :
              | _ -> 0))
 
     let law name (slot: string option) =
-        { Law = name
-          Passed = slot.IsNone
-          Counterexample = slot }
+        LawResult.subject "PolicyLaws" name count slot
 
     [ law "admission is total: it never throws" total
       law "admission is pure: admitting twice answers the same verdict" pure'

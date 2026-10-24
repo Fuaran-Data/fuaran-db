@@ -105,6 +105,7 @@ let tests =
           testCase "the op-stream records, verifies and replays through Core"
           <| fun _ ->
               let sw = ModelWire.streamWitness
+              let stream = OpStream.canonical OpStream.defaultHash sw
 
               let ops =
                   [ ModelOp.Add("t:orders", col "c:orders.discount" "discount" DecimalType "public")
@@ -114,14 +115,13 @@ let tests =
                   (Ok(state, OpStream.empty), ops)
                   ||> List.fold (fun acc op ->
                       acc
-                      |> Result.bind (fun (st, recs) ->
-                          OpStream.append OpStream.defaultHash sw (Actor.Human "author") op st recs))
+                      |> Result.bind (fun (st, recs) -> OpStream.append stream (Actor.Human "author") op st recs))
 
               match appended with
               | Ok(final, recs) ->
-                  Expect.isTrue (OpStream.verifyChain OpStream.defaultHash sw recs) "the chain verifies"
+                  Expect.isTrue (OpStream.verifyChain stream recs) "the chain verifies"
 
-                  match OpStream.toJsonl sw recs |> OpStream.fromJsonl sw with
+                  match Jsonl.write sw recs |> Jsonl.read sw with
                   | Ok back ->
                       match OpStream.replay sw state back with
                       | Ok replayed -> Expect.equal replayed final "replay reaches the same model"

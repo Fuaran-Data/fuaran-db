@@ -136,6 +136,12 @@ module PostgreSql =
                     "PostgreSQL's strpos counts code points from 1, where the reference counts UTF-16 code units from 0"
             | Least
             | Greatest -> Some "PostgreSQL's LEAST and GREATEST skip a null argument, where the reference propagates it"
+            | Pow
+            | Exp
+            | Ln
+            | Log10 ->
+                Some
+                    "not lowered: no pinned conformance fixture shows PostgreSQL's power, exp, ln and log agree with the reference on a domain edge or in the last place"
         | Construct.Operator op ->
             match op with
             | Add
@@ -221,6 +227,11 @@ module PostgreSql =
             | IndexOf -> call "strpos" args
             | Least -> call "LEAST" args
             | Greatest -> call "GREATEST" args
+            // Refused above; spelled for totality only, and never reached.
+            | Pow
+            | Exp
+            | Ln
+            | Log10 -> call ((sprintf "%A" f).ToUpperInvariant()) args
         | Construct.Operator op ->
             match op with
             | Add -> binary "+" args

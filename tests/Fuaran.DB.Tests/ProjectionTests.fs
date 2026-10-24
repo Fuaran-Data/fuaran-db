@@ -92,8 +92,9 @@ let corpusRejects () : (string * string * string) list =
     let text = ModelProjection.encode (project publicRows)
 
     let withModel (m: ModelNode) (grants: Grant list) =
-        Canon.render (
-            Canon.typed
+        Canonical.write
+            Rendering.CrossHost
+            (Canonical.typed
                 "modelProjection"
                 [ "version", JInt 1
                   "model", ModelWire.encodeNodeJson m
@@ -109,8 +110,7 @@ let corpusRejects () : (string * string * string) list =
                                     | GrantLevel.Aggregate -> "aggregate"
                                     | GrantLevel.RowLevel -> "row"
                                 ) ])
-                  ) ]
-        )
+                  ) ])
 
     let p = project publicRows
 
@@ -151,7 +151,7 @@ let corpusRejects () : (string * string * string) list =
       "unsupported-version", text.Replace("\"version\":1", "\"version\":2"), "DB-WIRE-UNSUPPORTED-VERSION"
       "missing-grants",
       (match Json.parse text with
-       | Ok(JObj fs) -> Canon.render (JObj(fs |> List.filter (fun (k, _) -> k <> "grants")))
+       | Ok(JObj fs) -> Canonical.write Rendering.CrossHost (JObj(fs |> List.filter (fun (k, _) -> k <> "grants")))
        | _ -> failwith "the projection's text is an object"),
       "DB-WIRE-MISSING-FIELD"
       "a-dataset-model-state",

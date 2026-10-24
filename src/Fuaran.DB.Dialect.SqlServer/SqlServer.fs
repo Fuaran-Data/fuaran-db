@@ -111,6 +111,12 @@ module SqlServer =
             | IndexOf -> Some "T-SQL's CHARINDEX matches under the column's collation and counts from 1"
             | Least
             | Greatest -> Some "T-SQL's LEAST and GREATEST skip a null argument, where the reference propagates it"
+            | Pow
+            | Exp
+            | Ln
+            | Log10 ->
+                Some
+                    "not lowered: no pinned conformance fixture shows T-SQL's POWER, EXP and LOG agree with the reference on a domain edge or in the last place"
         | Construct.Operator op ->
             match op with
             | Add
@@ -189,6 +195,11 @@ module SqlServer =
             | IndexOf -> call "CHARINDEX" args
             | Least -> call "LEAST" args
             | Greatest -> call "GREATEST" args
+            // Refused above; spelled for totality only, and never reached.
+            | Pow
+            | Exp
+            | Ln
+            | Log10 -> call ((sprintf "%A" f).ToUpperInvariant()) args
         | Construct.Operator op ->
             match op with
             | Add -> binary "+" args

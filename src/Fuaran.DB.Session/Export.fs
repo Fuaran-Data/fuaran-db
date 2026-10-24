@@ -78,7 +78,7 @@ module Export =
         | [], _
         | _, None -> Error "an empty session has no head to attest"
         | _, Some h ->
-            let head = OpStream.head records
+            let head = OpStream.head StreamConfig.canonical records
 
             let json =
                 JObj
@@ -87,7 +87,7 @@ module Export =
                       "predicateType", JStr PredicateType
                       "predicate", predicate state records ]
 
-            Ok(Encoding.UTF8.GetBytes(Canon.render json))
+            Ok(Encoding.UTF8.GetBytes(Canonical.write Rendering.CrossHost json))
 
     /// DSSE's pre-authentication encoding: what a signer signs, binding the payload to its type.
     let pae (payloadType: string) (payload: byte[]) : byte[] =
@@ -115,13 +115,13 @@ module Export =
 
     /// The DSSE envelope as JSON text, payload and signatures in base64.
     let envelope (signed: SignedSession) : string =
-        Canon.render (
-            JObj
+        Canonical.write
+            Rendering.CrossHost
+            (JObj
                 [ "payloadType", JStr signed.PayloadType
                   "payload", JStr(Convert.ToBase64String signed.Payload)
                   "signatures",
                   JArr(
                       signed.Signatures
                       |> List.map (fun (k, s) -> JObj [ "keyid", JStr k; "sig", JStr(Convert.ToBase64String s) ])
-                  ) ]
-        )
+                  ) ])

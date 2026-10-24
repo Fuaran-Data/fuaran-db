@@ -315,7 +315,10 @@ let tests =
           testCase "the AI surface tells a caller a column's unit and label"
           <| fun _ ->
               let tables = AiTools.readTools |> List.find (fun t -> t.Name = "tables")
-              let text = tables.Run(ModelOps.ofRoot freight) |> Canon.render
+
+              let text =
+                  tables.Run(ModelOps.ofRoot freight) |> Canonical.write Rendering.CrossHost
+
               Expect.stringContains text "\"unit\":\"[lb_av]\"" "the unit"
               Expect.stringContains text "\"label\":\"Gross weight\"" "the label"
 

@@ -68,12 +68,12 @@ let private writeFixtures () =
     let rejects =
         SessionTests.corpusRejects ()
         |> List.map (fun (name, kind, input, head, code) ->
-            Canon.render (
-                JObj(
+            Canonical.write
+                Rendering.CrossHost
+                (JObj(
                     [ "name", JStr name; "as", JStr kind; "input", JStr input; "code", JStr code ]
                     @ (head |> Option.map (fun h -> "expectedHead", JStr h) |> Option.toList)
-                )
-            ))
+                )))
         |> List.map (fun line -> "  " + line)
         |> String.concat ",\n"
 
@@ -88,13 +88,13 @@ let private writeFixtures () =
         ProjectionTests.corpusRejects ()
         |> List.map (fun (name, input, code) ->
             "  "
-            + Canon.render (
-                JObj
+            + Canonical.write
+                Rendering.CrossHost
+                (JObj
                     [ "name", JStr name
                       "as", JStr "projection"
                       "input", JStr input
-                      "code", JStr code ]
-            ))
+                      "code", JStr code ]))
         |> String.concat ",\n"
 
     File.WriteAllText(Path.Combine(dir, "projections", "rejects.json"), "[\n" + projectionRejects + "\n]\n", utf8)

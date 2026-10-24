@@ -310,7 +310,7 @@ module Kit =
         | Error e -> JObj [ "refused", JStr(sprintf "%A" e) ]
 
     let private stamp (fields: (string * JVal) list) =
-        Canon.render (JObj(("kit", JStr version) :: fields))
+        Canonical.write Rendering.CrossHost (JObj(("kit", JStr version) :: fields))
 
     /// The seed as emitted: the model, and every table keyed and named physically.
     let seedJson () : string =

@@ -92,7 +92,7 @@ module WireDecode =
     let result = ResultBuilder()
 
 /// The canonical wire codec for the dataset model, its state and its ops. Canonical: object keys
-/// sorted (Core's `Canon.render`), `$type`-tagged, one spelling per value, so equal models render
+/// sorted (Core's `Canonical.write Rendering.CrossHost`), `$type`-tagged, one spelling per value, so equal models render
 /// to equal bytes. Strict: an unknown field, a missing one, or a kind the vocabulary does not
 /// declare is a named refusal, never a default.
 module ModelWire =
@@ -171,12 +171,12 @@ module ModelWire =
     /// A fingerprint method as a typed object.
     let fingerprintJson (m: FingerprintMethod) : JVal =
         match m with
-        | FingerprintMethod.ChangeCounter -> Canon.typed "changeCounter" []
+        | FingerprintMethod.ChangeCounter -> Canonical.typed "changeCounter" []
         | FingerprintMethod.RowCountMaxChange pairs ->
-            Canon.typed
+            Canonical.typed
                 "rowCountMaxChange"
                 [ "tables", JArr(pairs |> List.map (fun (t, c) -> JObj [ "table", JStr t; "column", JStr c ])) ]
-        | FingerprintMethod.FileStat hash -> Canon.typed "fileStat" [ "contentHash", JBool hash ]
+        | FingerprintMethod.FileStat hash -> Canonical.typed "fileStat" [ "contentHash", JBool hash ]
 
     /// A kind's tag and its payload fields.
     let private kindFields (k: NodeKind) : (string * JVal) list =
@@ -237,14 +237,14 @@ module ModelWire =
             else
                 []
 
-        Canon.typed tag (("id", JStr n.Id) :: kindFields n.Kind @ children)
+        Canonical.typed tag (("id", JStr n.Id) :: kindFields n.Kind @ children)
 
     /// A node (and its subtree) as a `JVal`. A leaf kind writes no `children` field.
     let encodeNodeJson (n: ModelNode) : JVal = nodeJson n
 
     /// A model state as a `JVal`: the versioned envelope.
     let encodeStateJson (s: ModelState) : JVal =
-        Canon.typed
+        Canonical.typed
             "datasetModel"
             [ "version", JInt Version
               "root", nodeJson s.Root
@@ -253,22 +253,25 @@ module ModelWire =
     /// An op as a `JVal`.
     let encodeOpJson (op: ModelOp) : JVal =
         match op with
-        | ModelOp.Add(parent, node) -> Canon.typed "add" [ "parent", JStr parent; "node", nodeJson node ]
+        | ModelOp.Add(parent, node) -> Canonical.typed "add" [ "parent", JStr parent; "node", nodeJson node ]
         | ModelOp.Amend(id, kind) ->
-            Canon.typed
+            Canonical.typed
                 "amend"
                 [ "id", JStr id
-                  "kind", Canon.typed (ModelNode.kindTag kind) (kindFields kind) ]
-        | ModelOp.Retire id -> Canon.typed "retire" [ "id", JStr id ]
+                  "kind", Canonical.typed (ModelNode.kindTag kind) (kindFields kind) ]
+        | ModelOp.Retire id -> Canonical.typed "retire" [ "id", JStr id ]
 
     /// A node's canonical text.
-    let encodeNode (n: ModelNode) : string = Canon.render (nodeJson n)
+    let encodeNode (n: ModelNode) : string =
+        Canonical.write Rendering.CrossHost (nodeJson n)
 
     /// A model state's canonical text.
-    let encodeState (s: ModelState) : string = Canon.render (encodeStateJson s)
+    let encodeState (s: ModelState) : string =
+        Canonical.write Rendering.CrossHost (encodeStateJson s)
 
     /// An op's canonical text — what the op-stream hashes.
-    let encodeOp (op: ModelOp) : string = Canon.render (encodeOpJson op)
+    let encodeOp (op: ModelOp) : string =
+        Canonical.write Rendering.CrossHost (encodeOpJson op)
 
     // ---- decode ----
 

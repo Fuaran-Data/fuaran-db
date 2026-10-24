@@ -284,7 +284,7 @@ module ModelProjection =
 
     /// A projection as a `JVal`: `{"$type":"modelProjection","version":1,"model","grants"}`.
     let encodeJson (p: ProjectedModel) : JVal =
-        Canon.typed
+        Canonical.typed
             "modelProjection"
             [ "version", JInt Version
               "model", ModelWire.encodeNodeJson p.Model
@@ -296,7 +296,8 @@ module ModelProjection =
               ) ]
 
     /// A projection's canonical text: keys sorted, one spelling per value.
-    let encode (p: ProjectedModel) : string = Canon.render (encodeJson p)
+    let encode (p: ProjectedModel) : string =
+        Canonical.write Rendering.CrossHost (encodeJson p)
 
     /// The projection's hash: `sha256:` over its canonical text. Two subjects whose grants read the
     /// same part of one model, or of two models that differ only outside it, share it.
@@ -1167,9 +1168,7 @@ module ModelProjection =
                     | Error(ProjectionRefusal.Policy _), Error _ -> bump verdicts "refused, the custodian refuses")
 
             let law name (s: string option ref) =
-                { Law = name
-                  Passed = s.Value.IsNone
-                  Counterexample = s.Value }
+                LawResult.subject family name iterations s.Value
 
             [ law "the projection is total: it never throws" total
               law "the projection is pure: projecting twice answers the same projection" pure'

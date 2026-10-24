@@ -171,7 +171,10 @@ let tests =
                 testCase "the sources read tool shows each source's method, kind and blind spots"
                 <| fun _ ->
                     let tool = AiTools.readTools |> List.find (fun t -> t.Name = "sources")
-                    let text = Canon.render (tool.Run(ModelOps.ofRoot (shop (Some rowCounts))))
+
+                    let text =
+                        Canonical.write Rendering.CrossHost (tool.Run(ModelOps.ofRoot (shop (Some rowCounts))))
+
                     Expect.stringContains text "\"kind\":\"heuristic\"" "the kind"
                     Expect.stringContains text "does not advance the table's change column" "a miss"
                     Expect.stringContains text "\"fingerprint\":\"none\"" "a source declaring none says so" ]

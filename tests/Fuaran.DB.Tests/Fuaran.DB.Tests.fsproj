@@ -36,7 +36,7 @@
   <ItemGroup>
     <PackageReference Update="FSharp.Core" Version="10.1.300" />
     <PackageReference Include="Expecto" Version="10.2.3" />
-    <PackageReference Include="Fuaran.Core.Conformance" Version="0.37.0" />
+    <PackageReference Include="Fuaran.Core.Conformance" Version="0.40.3" />
     <!-- The engine-backed conformance leg's host only (Phase 1901); no package of this repository references a driver. -->
     <PackageReference Include="Microsoft.Data.SqlClient" Version="7.0.2" />
     <!-- The PostgreSQL engine-backed leg's host only (Phase 1906), as above. -->

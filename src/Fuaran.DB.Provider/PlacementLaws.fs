@@ -643,21 +643,31 @@ module PlacementLaws =
             else
                 Refusal.allTags |> List.filter (fun t -> t <> "dialectRefuses")
 
-        [ { Law = "the lowered prefix followed by the local suffix equals the reference as written, errors included"
-            Passed = parityR.Value.IsNone
-            Counterexample = parityR.Value }
-          { Law = "every statement is built from the model and its parameters alone: no request text"
-            Passed = requestR.Value.IsNone
-            Counterexample = requestR.Value }
-          { Law = "the split report accounts for every planned step, and names the step the boundary falls at"
-            Passed = coherentR.Value.IsNone
-            Counterexample = coherentR.Value }
-          { Law = "the provider is pure: lowering twice answers the same statement"
-            Passed = purityR.Value.IsNone
-            Counterexample = purityR.Value }
-          { Law = "the provider, the executor and the reference are total (never throw)"
-            Passed = totalityR.Value.IsNone
-            Counterexample = totalityR.Value }
+        [ LawResult.subject
+              family
+              "the lowered prefix followed by the local suffix equals the reference as written, errors included"
+              iterations
+              parityR.Value
+          LawResult.subject
+              family
+              "every statement is built from the model and its parameters alone: no request text"
+              iterations
+              requestR.Value
+          LawResult.subject
+              family
+              "the split report accounts for every planned step, and names the step the boundary falls at"
+              iterations
+              coherentR.Value
+          LawResult.subject
+              family
+              "the provider is pure: lowering twice answers the same statement"
+              iterations
+              purityR.Value
+          LawResult.subject
+              family
+              "the provider, the executor and the reference are total (never throw)"
+              iterations
+              totalityR.Value
           SampleAdequacy.reached family "refusal" seed (counts refusals refusalTags)
           SampleAdequacy.reached
               family

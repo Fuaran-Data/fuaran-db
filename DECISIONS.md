@@ -66,6 +66,33 @@ a `TimeUnit`. A reported timestamp is `TimestampType TimeUnit.Seconds`, the unit
 already spells (`datetime2(0)`, `timestamp(0)`). The finer units map to the same DDL for now, which is
 a known gap.
 
+**Amended 2026-10-24: the pins move to Core 0.40.3 and Compute 0.41.0.** This supersedes the closing
+paragraph's choice of Core 0.37.0, on the condition it named: Compute 0.41.0, published on nuget.org, is
+built against Core 0.40.2, so a published Compute is now built against a Core past 0.39.0's removal of
+`Canon`. The `Fuaran.Core.*` pins take 0.40.3, the newest published Core, rather than 0.40.2, because the
+full suite and both conformance legs are green on it, and a patch release beside the 0.40.2 Compute was
+built on is what the pin rule asks for. The raise crosses three Core breaks and three Compute ones, each
+handled where it lands:
+
+- Core's `Canon` is gone (0.39.0): every render is `Canonical.write Rendering.CrossHost` and every tagged
+  object `Canonical.typed`, which write the same bytes, so no vector and no emitted fixture moved.
+- An op stream is one `Stream` value (0.39.0): the connection record's stream is `SessionWire.stream`, the
+  canonical config over SHA-256, the same chain as before, and its wire is `Jsonl`'s.
+- `LawResult` gained `Family`, `Kind`, `Evidence` and `Reached` (0.40.0): the laws here build their results
+  with `LawResult.subject`, the iteration count as evidence.
+- Compute's `ScalarFn` gained `Pow`, `Exp`, `Ln` and `Log10`. Both dialects refuse the four by name, and the
+  kit gains a fixture reaching each (`reach-pow`, `reach-exp`, `reach-ln`, `reach-log10`), so the set is 68.
+  None is lowered to an engine function: the reference answers null at a domain edge (a zero or negative
+  logarithm, a negative base under a fractional exponent) and is host-rounded within 2 ulp, and nothing
+  here yet pins an engine to either. Lowering one is a later phase, with a pinned conformance fixture
+  showing the engine agrees. D7's survey gains the four as pinned rows.
+- Schema-walk knowledge carries an exactness mark (`Pinned | HostRounded`). Nothing here matches on it.
+- `Project`, `GroupBy`, `Unpivot` and `Pivot` refuse an output that names a column twice (compute D35).
+  Two of the placement laws' samples repeat one; they are taken up on their own.
+
+*Reopen if* a published Compute is built against a Core past 0.40.3; the pins then move again, on the same
+terms.
+
 ## 2026-10-12 — D11: PostgreSQL, the second dialect (Phase 1906)
 
 `Fuaran.DB.Dialect.PostgreSql` is the second dialect. Its purpose is to find what the first left in the
@@ -509,6 +536,10 @@ dialect does is still done per consuming engine. Five rulings, each with what wo
    | `Sqrt` | `sqrt` | pinned | a negative argument is null in the reference; the catalogue offers `NAN` or `ERROR`, and its own test case contradicts it |
    | `Least` | `least` | mapped | null-propagating, as the reference; one argument is itself. The DuckDB consumer refuses it |
    | `Greatest` | `greatest` | mapped | as `Least` |
+   | `Pow` | `power` | pinned | added 2026-10-24 (compute 0.41.0, read at `main` that day): the reference answers null outside the reals' domain and refuses int32 overflow by name, and a float exponent is host-rounded within 2 ulp; the catalogue states an overflow option only, no domain-error answer and no accuracy bound |
+   | `Exp` | `exp` | pinned | added 2026-10-24: host-rounded within 2 ulp in the reference; the catalogue's `rounding` option names a tie rule, not an accuracy bound |
+   | `Ln` | `ln` (`functions_logarithmic`) | pinned | added 2026-10-24: the reference answers null at zero and below; `on_domain_error: NULL` states the below, but `on_log_zero` offers `NAN`, `ERROR` or `MINUS_INFINITY`, never null; host-rounded as `Exp` |
+   | `Log10` | `log10` (`functions_logarithmic`) | pinned | added 2026-10-24: as `Ln` |
    | `IndexOf` | `strpos` minus one | pinned | `strpos` is 1-based and counts characters, where the reference counts UTF-16 units |
    | `Length` | `char_length` | outside | D4.4; the format counts characters, which is the very unit question D4.4 names |
    | `Lower` | `lower` | outside | D4.4; `char_set` is `UTF8` or `ASCII_ONLY`, with neither specified |
@@ -540,7 +571,11 @@ dialect does is still done per consuming engine. Five rulings, each with what wo
    The count, by group: relation forms 6 of 6 mapped; expression forms 5 of 5; operators 8 of 16;
    functions 6 of 14 (7 pinned, 1 unmappable); aggregates 0 of 6; join kinds 4 of 4; parameter types 5 of 7.
    That is 34 of 58 mapped, 23 pinned and 1 unmappable. Through the DuckDB consumer, `Least` and `Greatest`
-   fall to refused, which leaves 32. No parameter reaches that consumer as a parameter. The suite holds this
+   fall to refused, which leaves 32. *Amended 2026-10-24:* compute 0.41.0 added `Pow`, `Exp`, `Ln` and
+   `Log10`, each pinned (rows above), so functions are now 6 of 18 (11 pinned, 1 unmappable) and the subset
+   34 of 62 mapped (54.8%), 27 pinned and 1 unmappable. Four pinned rows only move the decision further
+   toward decline; it stands. Both dialects refuse the four by name until a pinned conformance fixture
+   shows an engine agrees. No parameter reaches that consumer as a parameter. The suite holds this
    table to the algebra: `SubstraitSurveyTests` goes red when the transform algebra gains a function,
    operator, aggregate, join kind or column type this table does not classify, and when the counts above no
    longer match the table's rows.

@@ -869,9 +869,7 @@ let corpusRejects () : (string * string * string * string option * string) list 
               SessionOp.ValuesRecorded("q", [ "@p0", Str "x" ]) ]
 
         ops
-        |> List.fold
-            (fun recs op -> OpStream.appendChainOnly SessionWire.hashFn SessionWire.encodeOp actor op recs)
-            OpStream.empty
+        |> List.fold (fun recs op -> OpStream.appendChainOnly SessionWire.stream actor op recs) OpStream.empty
         |> Export.wire
 
     [ "torn-tail", "session", wire.Substring(0, wire.Length - 20), None, "DB-SESSION-TORN-TAIL"
