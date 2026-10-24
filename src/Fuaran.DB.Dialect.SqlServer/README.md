@@ -26,12 +26,18 @@ as its driver read it, to `SqlServer.decodeCell`.
 | `bool` | `bit` | `bit` |
 | `string` | `nvarchar(max)` | `nvarchar`, `varchar`, `nchar`, `char` |
 | `date` | `date` | `date` |
-| `timestamp` | `datetime2(0)` | `datetime2`, `datetime`, `smalldatetime` |
+| `timestamp` (seconds) | `datetime2(0)` | `datetime2`, `datetime`, `smalldatetime` |
+| `timestamp` (milliseconds) | `datetime2(3)` | |
+| `timestamp` (microseconds) | `datetime2(6)` | |
+| `timestamp` (nanoseconds) | refused | |
 | `decimal` | `decimal(38, 10)` | `decimal`, `numeric`, `money`, `smallmoney` |
 
 The exact decimal is `decimal(38, 10)`: a value with more than ten digits after the point is rounded by
 the engine when it is stored, and a value outside the .NET decimal's range is refused by
 `parameterValue` by name. `bigint`, `datetimeoffset`, binary and spatial types read as no column type.
+A timestamp keeps the fractional digits its unit states. `datetime2` holds at most seven (100 ns), so a
+nanosecond timestamp is refused by name (`typeRefusal`): `createTable` answers `Error` naming the column,
+and a nanosecond parameter is a refused construct. A reported timestamp still reads as seconds.
 
 ## What it lowers
 

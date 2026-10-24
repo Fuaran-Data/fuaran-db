@@ -24,8 +24,24 @@ module SqlServer =
     /// `@p0`, `@p1`, …: a named marker per ordinal.
     let marker (ordinal: int) : string = "@p" + string ordinal
 
+    /// Why a column type has no engine type that holds it exactly, or `None`. `datetime2` keeps at
+    /// most seven fractional digits (100 ns), so a nanosecond timestamp would be truncated.
+    let typeRefusal (t: ColumnType) : string option =
+        match t with
+        | TimestampType TimeUnit.Nanoseconds ->
+            Some "a nanosecond timestamp: T-SQL's datetime2 keeps at most seven fractional digits (100 ns)"
+        | TimestampType _
+        | IntType
+        | FloatType
+        | BoolType
+        | StringType
+        | DateType
+        | DecimalType -> None
+
     /// The engine type a column of this type is held in, and a parameter of it is declared as. The
-    /// exact decimal is `decimal(38, 10)`: thirty-eight digits, ten of them after the point.
+    /// exact decimal is `decimal(38, 10)`: thirty-eight digits, ten of them after the point. A
+    /// timestamp keeps the fractional digits its unit states (`datetime2(0)`, `(3)`, `(6)`); a
+    /// nanosecond one, which `typeRefusal` refuses, is spelled at the engine's finest, `datetime2(7)`.
     let mapType (t: ColumnType) : string =
         match t with
         | IntType -> "int"
@@ -33,7 +49,10 @@ module SqlServer =
         | BoolType -> "bit"
         | StringType -> "nvarchar(max)"
         | DateType -> "date"
-        | TimestampType _ -> "datetime2(0)"
+        | TimestampType TimeUnit.Seconds -> "datetime2(0)"
+        | TimestampType TimeUnit.Milliseconds -> "datetime2(3)"
+        | TimestampType TimeUnit.Microseconds -> "datetime2(6)"
+        | TimestampType TimeUnit.Nanoseconds -> "datetime2(7)"
         | DecimalType -> "decimal(38, 10)"
 
     /// The other direction: the column type an engine type name reads as, ignoring its length,
@@ -164,8 +183,8 @@ module SqlServer =
             | BoolType
             | StringType
             | DateType
-            | TimestampType _
             | DecimalType -> None
+            | TimestampType _ -> typeRefusal ty
         | Construct.Cast _ -> Some "T-SQL's CAST coerces where the reference refuses"
         | Construct.Rounding _ ->
             Some "decimal scale on division: T-SQL scales and rounds a decimal result by its own rule"
@@ -381,15 +400,24 @@ module SqlServer =
                 | None -> unexpected ()
             | _ -> unexpected ()
 
-    /// The statement that creates a table of these columns, each nullable.
-    let createTable (table: string) (columns: (string * ColumnType) list) : string =
-        "CREATE TABLE "
-        + quote table
-        + " ("
-        + (columns
-           |> List.map (fun (c, t) -> quote c + " " + mapType t + " NULL")
-           |> String.concat ", ")
-        + ")"
+    /// The statement that creates a table of these columns, each nullable, or the refusal of the
+    /// first column no engine type holds exactly (`typeRefusal`).
+    let createTable (table: string) (columns: (string * ColumnType) list) : Result<string, string> =
+        match
+            columns
+            |> List.tryPick (fun (c, t) -> typeRefusal t |> Option.map (fun why -> c, why))
+        with
+        | Some(c, why) -> Error(sprintf "the column '%s' cannot be created: %s" c why)
+        | None ->
+            Ok(
+                "CREATE TABLE "
+                + quote table
+                + " ("
+                + (columns
+                   |> List.map (fun (c, t) -> quote c + " " + mapType t + " NULL")
+                   |> String.concat ", ")
+                + ")"
+            )
 
     /// The statement that drops a table if it exists.
     let dropTable (table: string) : string = "DROP TABLE IF EXISTS " + quote table

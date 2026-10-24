@@ -252,3 +252,11 @@ Riding the draft (2026-10-24), on the same terms: the pins move to Core 0.40.3 a
   using one lowers the prefix before it and evaluates the rest locally.
 - **Additive — the conformance set**: four fixtures, `reach-pow`, `reach-exp`, `reach-ln` and
   `reach-log10`, take the set to 68. Every existing fixture file keeps its bytes.
+- **Breaking — `createTable` answers `Result<string, string>`** in both dialects, refusing a column no
+  engine type holds exactly by name. A host that sends the text straight to its engine now matches first.
+- **Additive — `typeRefusal`** in both dialects: why a column type has no exact engine type. A nanosecond
+  timestamp is the one case.
+- **The posture, changed — a timestamp's DDL follows its unit** (D12, the second amendment): `datetime2(3)`
+  and `(6)`, `timestamp(3)` and `(6)` for milliseconds and microseconds, where every timestamp was
+  seconds; a nanosecond timestamp is refused as a column and as a parameter. A seconds timestamp's DDL is
+  unchanged.

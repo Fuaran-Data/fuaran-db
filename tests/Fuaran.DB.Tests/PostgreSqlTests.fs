@@ -118,7 +118,11 @@ let pgHost (conn: NpgsqlConnection) : Host =
             try
                 for KeyValue(name, t) in tables do
                     nonQuery conn (PostgreSql.dropTable name)
-                    nonQuery conn (PostgreSql.createTable name (t.Schema |> List.map (fun f -> f.Name, f.Type)))
+
+                    match PostgreSql.createTable name (t.Schema |> List.map (fun f -> f.Name, f.Type)) with
+                    | Ok ddl -> nonQuery conn ddl
+                    | Error why -> failwith why
+
                     let insert = PostgreSql.insertRow name (t.Schema |> List.map _.Name)
 
                     for i in 0 .. Table.rowCount t - 1 do
@@ -349,6 +353,32 @@ let tests =
                           (ApplyFn(Round, [ Col "x" ])))
                       (Ok(Float spelled))
                       (x.ToString "R")
+
+          testCase "a timestamp column's DDL keeps its unit's precision, and a nanosecond one is refused by name"
+          <| fun _ ->
+              for unit, spelled in
+                  [ TimeUnit.Seconds, "timestamp(0) without time zone"
+                    TimeUnit.Milliseconds, "timestamp(3) without time zone"
+                    TimeUnit.Microseconds, "timestamp(6) without time zone" ] do
+                  let ty = TimestampType unit
+
+                  match PostgreSql.createTable "t" [ "at", ty ] with
+                  | Ok ddl -> Expect.stringContains ddl (" " + spelled + " NULL") (sprintf "%A" unit)
+                  | Error why -> failtestf "%A: refused: %s" unit why
+
+                  Expect.isNone (PostgreSql.typeRefusal ty) (sprintf "%A is held" unit)
+                  Expect.isNone (PostgreSql.refuses (Construct.Parameter ty)) (sprintf "a %A parameter lowers" unit)
+
+              let ns = TimestampType TimeUnit.Nanoseconds
+
+              match PostgreSql.createTable "t" [ "id", IntType; "at", ns ] with
+              | Ok ddl -> failtestf "a nanosecond column was created: %s" ddl
+              | Error why ->
+                  Expect.stringContains why "'at'" "the refusal names the column"
+                  Expect.stringContains why "nanosecond" "and why"
+
+              Expect.isSome (PostgreSql.typeRefusal ns) "the type map refuses it"
+              Expect.isSome (PostgreSql.refuses (Construct.Parameter ns)) "a nanosecond parameter is refused"
 
           testCase "the type map: every column type to an engine type and back"
           <| fun _ ->

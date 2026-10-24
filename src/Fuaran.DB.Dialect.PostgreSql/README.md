@@ -28,11 +28,17 @@ read it, to `PostgreSql.decodeCell`. It needs PostgreSQL 11 or later, for `start
 | `bool` | `boolean` | `boolean`, `bool` |
 | `string` | `text` | `text`, `varchar`, `character varying` |
 | `date` | `date` | `date` |
-| `timestamp` | `timestamp(0) without time zone` | `timestamp`, `timestamp without time zone` |
+| `timestamp` (seconds) | `timestamp(0) without time zone` | `timestamp`, `timestamp without time zone` |
+| `timestamp` (milliseconds) | `timestamp(3) without time zone` | |
+| `timestamp` (microseconds) | `timestamp(6) without time zone` | |
+| `timestamp` (nanoseconds) | refused | |
 | `decimal` | `numeric` | `numeric`, `decimal` |
 
 The exact decimal is an unconstrained `numeric`, which holds the reference's value exactly. A value outside
-the .NET decimal's range is refused by `parameterValue` by name. The following read as no column type:
+the .NET decimal's range is refused by `parameterValue` by name. A timestamp keeps the fractional digits
+its unit states. `timestamp` holds at most six (1 microsecond), so a nanosecond timestamp is refused by
+name (`typeRefusal`): `createTable` answers `Error` naming the column, and a nanosecond parameter is a
+refused construct. A reported timestamp still reads as seconds. The following read as no column type:
 - `bigint`, which outgrows int32.
 - `timestamp with time zone`, which carries an offset.
 - `character`, which compares with its padding ignored.

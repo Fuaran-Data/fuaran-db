@@ -96,6 +96,17 @@ handled where it lands:
 *Reopen if* a published Compute is built against a Core past 0.40.3; the pins then move again, on the same
 terms.
 
+**Amended 2026-10-24: a timestamp column's DDL follows its unit.** This closes the closing paragraph's
+known gap. Each dialect spells a timestamp at the fractional digits its unit states: `datetime2(0)`, `(3)`
+and `(6)` in SQL Server, `timestamp(0)`, `(3)` and `(6)` in PostgreSQL, for seconds, milliseconds and
+microseconds. A nanosecond timestamp is refused by name in both (`typeRefusal`): SQL Server's `datetime2`
+keeps seven digits and PostgreSQL's `timestamp` six, so either would lose the last digits. `createTable`
+answers a `Result`, refusing the first such column by name, and a nanosecond parameter is a refused
+construct, so the provider places it in the local suffix rather than declare a type that truncates it.
+Two things stay as they were. A reported timestamp reads as seconds whatever its precision, as this
+entry decided. A timestamp cell still travels as seconds text through `parameterValue` and `decodeCell`.
+*Reopen if* a cell carries a sub-second value; the value path then follows the unit as the DDL now does.
+
 ## 2026-10-12 — D11: PostgreSQL, the second dialect (Phase 1906)
 
 `Fuaran.DB.Dialect.PostgreSql` is the second dialect. Its purpose is to find what the first left in the

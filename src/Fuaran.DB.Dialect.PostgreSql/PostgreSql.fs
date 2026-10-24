@@ -29,8 +29,24 @@ module PostgreSql =
     /// The collation a string is read under: byte order over UTF-8, which is code point order.
     let collation = "\"C\""
 
+    /// Why a column type has no engine type that holds it exactly, or `None`. `timestamp` keeps at
+    /// most six fractional digits (1 microsecond), so a nanosecond timestamp would be rounded.
+    let typeRefusal (t: ColumnType) : string option =
+        match t with
+        | TimestampType TimeUnit.Nanoseconds ->
+            Some "a nanosecond timestamp: PostgreSQL's timestamp keeps at most six fractional digits (1 microsecond)"
+        | TimestampType _
+        | IntType
+        | FloatType
+        | BoolType
+        | StringType
+        | DateType
+        | DecimalType -> None
+
     /// The engine type a column of this type is held in, and a parameter of it is declared as. The
-    /// exact decimal is an unconstrained `numeric`, which holds the reference's value exactly.
+    /// exact decimal is an unconstrained `numeric`, which holds the reference's value exactly. A
+    /// timestamp keeps the fractional digits its unit states (`timestamp(0)`, `(3)`, `(6)`); a
+    /// nanosecond one, which `typeRefusal` refuses, is spelled at the engine's finest, `timestamp(6)`.
     let mapType (t: ColumnType) : string =
         match t with
         | IntType -> "integer"
@@ -38,7 +54,10 @@ module PostgreSql =
         | BoolType -> "boolean"
         | StringType -> "text"
         | DateType -> "date"
-        | TimestampType _ -> "timestamp(0) without time zone"
+        | TimestampType TimeUnit.Seconds -> "timestamp(0) without time zone"
+        | TimestampType TimeUnit.Milliseconds -> "timestamp(3) without time zone"
+        | TimestampType TimeUnit.Microseconds
+        | TimestampType TimeUnit.Nanoseconds -> "timestamp(6) without time zone"
         | DecimalType -> "numeric"
 
     let private modifiers = Regex(@"\([^)]*\)")
@@ -191,8 +210,8 @@ module PostgreSql =
             | BoolType
             | StringType
             | DateType
-            | TimestampType _
             | DecimalType -> None
+            | TimestampType _ -> typeRefusal ty
         | Construct.Cast _ -> Some "PostgreSQL's CAST coerces where the reference refuses"
         | Construct.Rounding _ ->
             Some "decimal scale on division: PostgreSQL scales and rounds a numeric result by its own rule"
@@ -405,14 +424,23 @@ module PostgreSql =
 
     /// The statement that creates a table of these columns, each nullable, in the database's own
     /// collation: the dialect reads strings under the C collation whatever a column declares.
-    let createTable (table: string) (columns: (string * ColumnType) list) : string =
-        "CREATE TABLE "
-        + quote table
-        + " ("
-        + (columns
-           |> List.map (fun (c, t) -> quote c + " " + mapType t + " NULL")
-           |> String.concat ", ")
-        + ")"
+    /// A column no engine type holds exactly (`typeRefusal`) refuses the whole statement, naming it.
+    let createTable (table: string) (columns: (string * ColumnType) list) : Result<string, string> =
+        match
+            columns
+            |> List.tryPick (fun (c, t) -> typeRefusal t |> Option.map (fun why -> c, why))
+        with
+        | Some(c, why) -> Error(sprintf "the column '%s' cannot be created: %s" c why)
+        | None ->
+            Ok(
+                "CREATE TABLE "
+                + quote table
+                + " ("
+                + (columns
+                   |> List.map (fun (c, t) -> quote c + " " + mapType t + " NULL")
+                   |> String.concat ", ")
+                + ")"
+            )
 
     /// The statement that drops a table if it exists.
     let dropTable (table: string) : string = "DROP TABLE IF EXISTS " + quote table

@@ -125,7 +125,11 @@ let sqlHost (conn: SqlConnection) : Host =
             try
                 for KeyValue(name, t) in tables do
                     nonQuery conn (SqlServer.dropTable name)
-                    nonQuery conn (SqlServer.createTable name (t.Schema |> List.map (fun f -> f.Name, f.Type)))
+
+                    match SqlServer.createTable name (t.Schema |> List.map (fun f -> f.Name, f.Type)) with
+                    | Ok ddl -> nonQuery conn ddl
+                    | Error why -> failwith why
+
                     let insert = SqlServer.insertRow name (t.Schema |> List.map _.Name)
 
                     for i in 0 .. Table.rowCount t - 1 do
@@ -271,6 +275,32 @@ let tests =
                   (textOf SqlServer.dialect "group-min-max-bool")
                   "CAST(MIN(CAST([c7] AS tinyint)) AS bit)"
                   "bit min"
+
+          testCase "a timestamp column's DDL keeps its unit's precision, and a nanosecond one is refused by name"
+          <| fun _ ->
+              for unit, spelled in
+                  [ TimeUnit.Seconds, "datetime2(0)"
+                    TimeUnit.Milliseconds, "datetime2(3)"
+                    TimeUnit.Microseconds, "datetime2(6)" ] do
+                  let ty = TimestampType unit
+
+                  match SqlServer.createTable "t" [ "at", ty ] with
+                  | Ok ddl -> Expect.stringContains ddl (" " + spelled + " NULL") (sprintf "%A" unit)
+                  | Error why -> failtestf "%A: refused: %s" unit why
+
+                  Expect.isNone (SqlServer.typeRefusal ty) (sprintf "%A is held" unit)
+                  Expect.isNone (SqlServer.refuses (Construct.Parameter ty)) (sprintf "a %A parameter lowers" unit)
+
+              let ns = TimestampType TimeUnit.Nanoseconds
+
+              match SqlServer.createTable "t" [ "id", IntType; "at", ns ] with
+              | Ok ddl -> failtestf "a nanosecond column was created: %s" ddl
+              | Error why ->
+                  Expect.stringContains why "'at'" "the refusal names the column"
+                  Expect.stringContains why "nanosecond" "and why"
+
+              Expect.isSome (SqlServer.typeRefusal ns) "the type map refuses it"
+              Expect.isSome (SqlServer.refuses (Construct.Parameter ns)) "a nanosecond parameter is refused"
 
           testCase "the type map: every column type to an engine type and back"
           <| fun _ ->
