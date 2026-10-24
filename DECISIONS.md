@@ -88,7 +88,10 @@ handled where it lands:
   showing the engine agrees. D7's survey gains the four as pinned rows.
 - Schema-walk knowledge carries an exactness mark (`Pinned | HostRounded`). Nothing here matches on it.
 - `Project`, `GroupBy`, `Unpivot` and `Pivot` refuse an output that names a column twice (compute D35).
-  Two of the placement laws' samples repeat one; they are taken up on their own.
+  The lowering already refused a repeated output name (`Refusal.RepeatedName`, D4), so the two engines
+  agree. The two placement-law samples that repeat a name stay as they are: they are the only samples
+  that reach `repeatedName`, and renaming them leaves the refusal guard red. A test pins that the lowering
+  and the reference refuse both, naming the column.
 
 *Reopen if* a published Compute is built against a Core past 0.40.3; the pins then move again, on the same
 terms.

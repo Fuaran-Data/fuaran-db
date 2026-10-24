@@ -86,6 +86,36 @@ let tests =
               census "PlacementLaws (reference dialect)" results
               Expect.isEmpty (failed results) "every placement law holds"
 
+          testCase "a repeated output name is refused by the lowering and by the reference alike"
+          <| fun _ ->
+              // The two samples that reach `repeatedName` in the placement laws. The reference has
+              // refused both since compute 0.41.0 (its D35); the lowering refuses them by name, so
+              // the boundary falls at the step and the suffix meets the reference's own refusal.
+              let pipelines =
+                  [ [ Project [ "id", "req_x"; "s", "req_x" ] ], "req_x"
+                    [ GroupBy([ "s" ], [ { Name = "s"; Fn = Count; Of = "id" } ]) ], "s" ]
+
+              let case0 = PlacementLaws.sample seed 1 |> List.head
+
+              for pipeline, name in pipelines do
+                  match FoldSplit.lowerUnchecked model d (Ref "orders") pipeline Bindings.none None with
+                  | Ok l ->
+                      match l.Split.Boundary with
+                      | Some(Refusal.RepeatedName(_, n)) -> Expect.equal n name "the lowering names the column"
+                      | other -> failtestf "%A: the lowering placed no repeated-name boundary: %A" pipeline other
+                  | Error(Refusal.RepeatedName(_, n)) -> Expect.equal n name "the lowering names the column"
+                  | Error r -> failtestf "%A: the lowering refused otherwise: %s" pipeline (Refusal.describe r)
+
+                  let c =
+                      { case0 with
+                          Source = Ref "orders"
+                          Pipeline = pipeline
+                          Bindings = Bindings.none }
+
+                  match PlacementLaws.reference c with
+                  | Error(TypeError msg) -> Expect.stringContains msg name "the reference names the column"
+                  | other -> failtestf "%A: the reference did not refuse it: %A" pipeline other
+
           testCase "the parity law goes red over an engine that orders nulls first (its falsifier)"
           <| fun _ ->
               let results =

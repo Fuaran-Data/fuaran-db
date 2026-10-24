@@ -182,6 +182,9 @@ module PlacementLaws =
           [ Project [ "id", "id"; "fk", "fk"; "s", "req_channel"; "amt", "amt"; "big", "big" ] ]
           [ Project [ "id", "id"; "s", "s"; "b", "b"; "d", "d"; "amt", "amt"; "fk", "fk" ] ]
           [ Project [] ]
+          // A repeated output name: the only sample reaching `repeatedName`, refused by the lowering
+          // and, since compute 0.41.0 (its D35), by the reference too, so the parity law reads the two
+          // refusals' agreement. Renaming the output would leave the refusal unreached.
           [ Project [ "id", "req_x"; "s", "req_x" ] ]
           // joins
           [ Join(Ref "customers", [ "fk", "id" ], Inner) ]
@@ -210,6 +213,7 @@ module PlacementLaws =
             GroupBy([], [ agg "req_n" Count "id"; agg "req_sum" Sum "amt" ]) ]
           [ GroupBy([ "s" ], [ agg "req_mid" Median "amt" ]) ]
           [ GroupBy([ "b" ], [ agg "req_bad" Sum "s" ]) ]
+          // An aggregate named as its key: `repeatedName` again, through the grouping (see above).
           [ GroupBy([ "s" ], [ agg "s" Count "id" ]) ]
           [ GroupBy([], []) ]
           // pages, and the sort and limit that do not pair
