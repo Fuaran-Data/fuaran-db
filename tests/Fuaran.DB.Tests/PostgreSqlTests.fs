@@ -227,6 +227,68 @@ let runAgainstServer (dialect: Dialect) (linguistic: bool) (connectionString: st
         NpgsqlConnection.ClearAllPools()
         nonQuery admin ("DROP DATABASE " + PostgreSql.quote database + " WITH (FORCE)")
 
+/// One instant per unit the engine holds, as ticks past 2026-06-02T09:30:15 and its canonical text.
+let private timestampsByUnit =
+    [ TimeUnit.Seconds, 0L, "2026-06-02T09:30:15Z"
+      TimeUnit.Milliseconds, 1_230_000L, "2026-06-02T09:30:15.123Z"
+      TimeUnit.Microseconds, 1_234_560L, "2026-06-02T09:30:15.123456Z" ]
+
+/// Per unit, in a database made for the run: a column created at the unit reports the unit back through
+/// `format_type`, and an instant bound at the unit reads back whole.
+let timestampRoundTrip (connectionString: string) =
+    let database = "fuaran_db_units_" + Guid.NewGuid().ToString("N").Substring(0, 12)
+
+    use admin = new NpgsqlConnection(connectionString)
+    admin.Open()
+
+    nonQuery
+        admin
+        ("CREATE DATABASE "
+         + PostgreSql.quote database
+         + " TEMPLATE template0 ENCODING 'UTF8'")
+
+    try
+        let builder = NpgsqlConnectionStringBuilder(connectionString)
+        builder.Database <- database
+        builder.Pooling <- false
+        use conn = new NpgsqlConnection(builder.ConnectionString)
+        conn.Open()
+
+        for unit, _, text in timestampsByUnit do
+            let ty = TimestampType unit
+            let table = "at_" + ColumnType.tag ty
+
+            match PostgreSql.createTable table [ "at", ty ] with
+            | Ok ddl -> nonQuery conn ddl
+            | Error why -> failtestf "%A: refused: %s" unit why
+
+            use insert = new NpgsqlCommand(PostgreSql.insertRow table [ "at" ], conn)
+            addParameter insert ty (Timestamp text)
+            insert.ExecuteNonQuery() |> ignore
+
+            use reported =
+                new NpgsqlCommand(
+                    "SELECT format_type(atttypid, atttypmod) FROM pg_attribute WHERE attrelid = $1::regclass AND attname = 'at'",
+                    conn
+                )
+
+            reported.Parameters.Add(NpgsqlParameter(Value = PostgreSql.quote table))
+            |> ignore
+
+            let engineType = reported.ExecuteScalar() :?> string
+            Expect.equal (PostgreSql.columnType engineType) (Some ty) (sprintf "%s reports %A" engineType unit)
+
+            use select =
+                new NpgsqlCommand("SELECT " + PostgreSql.quote "at" + " FROM " + PostgreSql.quote table, conn)
+
+            Expect.equal
+                (PostgreSql.decodeCell ty (select.ExecuteScalar()))
+                (Ok(Timestamp text))
+                (sprintf "%A reads back whole" unit)
+    finally
+        NpgsqlConnection.ClearAllPools()
+        nonQuery admin ("DROP DATABASE " + PostgreSql.quote database + " WITH (FORCE)")
+
 /// One line per fixture: its verdict, how many planned steps the engine ran, and where the boundary fell.
 /// The record a certification cites, so every fixture is named, not only those that differed.
 let fixtureLines (report: Report) : string list =
@@ -380,6 +442,53 @@ let tests =
               Expect.isSome (PostgreSql.typeRefusal ns) "the type map refuses it"
               Expect.isSome (PostgreSql.refuses (Construct.Parameter ns)) "a nanosecond parameter is refused"
 
+          testCase "a timestamp keeps its unit: read from the engine type, bound and decoded at the unit's fraction"
+          <| fun _ ->
+              let at = DateTime(2026, 6, 2, 9, 30, 15)
+
+              for unit, ticks, text in timestampsByUnit do
+                  let ty = TimestampType unit
+                  let value = at.AddTicks ticks
+
+                  Expect.equal
+                      (PostgreSql.columnType (PostgreSql.mapType ty))
+                      (Some ty)
+                      (sprintf "%s reads as %A" (PostgreSql.mapType ty) unit)
+
+                  Expect.equal
+                      (PostgreSql.decodeCell ty (box value))
+                      (Ok(Timestamp text))
+                      (sprintf "%A decodes whole" unit)
+
+                  match PostgreSql.parameterValue (Timestamp text) with
+                  | Ok(:? DateTime as d) ->
+                      Expect.equal d value (sprintf "%A binds whole" unit)
+                      Expect.equal d.Kind DateTimeKind.Unspecified "a timestamp without time zone"
+                  | other -> failtestf "%A: expected a DateTime, got %A" unit other
+
+              Expect.equal
+                  (PostgreSql.decodeCell (TimestampType TimeUnit.Milliseconds) (box (at.AddTicks 1_200_000L)))
+                  (Ok(Timestamp "2026-06-02T09:30:15.12Z"))
+                  "the minimal text: no trailing zero"
+
+              Expect.equal
+                  (PostgreSql.columnType "timestamp without time zone")
+                  (Some(TimestampType TimeUnit.Microseconds))
+                  "a bare timestamp is six digits"
+
+              Expect.equal
+                  (PostgreSql.columnType "timestamp(2)")
+                  (Some(TimestampType TimeUnit.Milliseconds))
+                  "two digits need milliseconds"
+
+              match PostgreSql.decodeCell (TimestampType TimeUnit.Seconds) (box (at.AddTicks 5_000_000L)) with
+              | Error(TypeError why) -> Expect.stringContains why "finer than the column's timestamp" "named"
+              | other -> failtestf "a half second was not refused at seconds: %A" other
+
+              Expect.isError
+                  (PostgreSql.parameterValue (Timestamp "2026-06-02T09:30:15.1234567Z"))
+                  "finer than a microsecond"
+
           testCase "the type map: every column type to an engine type and back"
           <| fun _ ->
               for t in
@@ -389,6 +498,8 @@ let tests =
                     StringType
                     DateType
                     (TimestampType TimeUnit.Seconds)
+                    (TimestampType TimeUnit.Milliseconds)
+                    (TimestampType TimeUnit.Microseconds)
                     DecimalType ] do
                   Expect.equal (PostgreSql.columnType (PostgreSql.mapType t)) (Some t) (ColumnType.tag t)
 
@@ -397,7 +508,7 @@ let tests =
 
               Expect.equal
                   (PostgreSql.columnType "timestamp(3) without time zone")
-                  (Some(TimestampType TimeUnit.Seconds))
+                  (Some(TimestampType TimeUnit.Milliseconds))
                   "timestamp"
 
               Expect.equal (PostgreSql.columnType "bigint") None "bigint has no column"
@@ -581,7 +692,12 @@ let tests =
            | connectionString ->
                testList
                    "ARMED"
-                   [ testCase "the kit against the configured PostgreSQL agrees, or differs only as pinned"
+                   [ // A timestamp keeps its unit through the engine: a column created at each unit reports
+                     // that unit back, and an instant bound at it reads back whole.
+                     testCase "a timestamp column at each unit reports its unit and round-trips its fraction"
+                     <| fun _ -> timestampRoundTrip connectionString
+
+                     testCase "the kit against the configured PostgreSQL agrees, or differs only as pinned"
                      <| fun _ ->
                          let report, version, collation =
                              runAgainstServer PostgreSql.dialect false connectionString

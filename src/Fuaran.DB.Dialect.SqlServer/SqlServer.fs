@@ -55,16 +55,29 @@ module SqlServer =
         | TimestampType TimeUnit.Nanoseconds -> "datetime2(7)"
         | DecimalType -> "decimal(38, 10)"
 
-    /// The other direction: the column type an engine type name reads as, ignoring its length,
-    /// precision and scale, or `None` for a type the columnar model has no column for (`bigint`, which
-    /// outgrows int32; `datetimeoffset`, which carries an offset; binary and spatial types).
+    /// The other direction: the column type an engine type name reads as, ignoring its length and
+    /// scale, or `None` for a type the columnar model has no column for (`bigint`, which outgrows int32;
+    /// `datetimeoffset`, which carries an offset; binary and spatial types). A timestamp keeps the unit
+    /// its precision states: `datetime2(n)` is the coarsest unit holding `n` fractional digits, a bare
+    /// `datetime2` is the engine's default of seven (nanoseconds, which `typeRefusal` refuses to create),
+    /// `datetime` keeps milliseconds (it rounds to 1/300 s, which three digits spell exactly) and
+    /// `smalldatetime` whole seconds.
     let columnType (engineType: string) : ColumnType option =
-        let name =
-            let t = engineType.Trim().ToLowerInvariant()
+        let t = engineType.Trim().ToLowerInvariant()
 
+        let name, precision =
             match t.IndexOf '(' with
-            | -1 -> t
-            | i -> t.Substring(0, i).Trim()
+            | -1 -> t, None
+            | i ->
+                match
+                    Int32.TryParse(
+                        t.Substring(i + 1).TrimEnd(')', ' '),
+                        NumberStyles.None,
+                        CultureInfo.InvariantCulture
+                    )
+                with
+                | true, n -> t.Substring(0, i).Trim(), Some n
+                | false, _ -> t.Substring(0, i).Trim(), None
 
         match name with
         | "int"
@@ -78,8 +91,8 @@ module SqlServer =
         | "nchar"
         | "char" -> Some StringType
         | "date" -> Some DateType
-        | "datetime2"
-        | "datetime"
+        | "datetime2" -> Some(TimestampType(TimeUnit.ofDigits (defaultArg precision 7)))
+        | "datetime" -> Some(TimestampType TimeUnit.Milliseconds)
         | "smalldatetime" -> Some(TimestampType TimeUnit.Seconds)
         | "decimal"
         | "numeric"
@@ -336,11 +349,50 @@ module SqlServer =
     // ---- what a host needs to bind and to read ----
 
     let private dateFormat = "yyyy-MM-dd"
-    let private timestampFormat = "yyyy-MM-dd'T'HH:mm:ss'Z'"
+    let private epochTicks = DateTime(1970, 1, 1).Ticks
+    let private ticksPerSecond = 10_000_000L
+
+    /// A canonical timestamp as the `DateTime` the engine stores, exact to its fraction: `datetime2`
+    /// keeps the 100 ns tick a `DateTime` does. `Error` for a text that is not canonical, an instant
+    /// before the year 1, or a fraction finer than a tick.
+    let private instantValue (s: string) : Result<DateTime, string> =
+        match TemporalText.tryInstant TimeUnit.Nanoseconds s with
+        | None -> Error(sprintf "the timestamp %s is not canonical" s)
+        | Some(_, nanos) when nanos % 100 <> 0 -> Error(sprintf "the timestamp %s is finer than datetime2's 100 ns" s)
+        | Some(second, nanos) ->
+            let ticks = epochTicks + int64 second * ticksPerSecond + int64 (nanos / 100)
+
+            if ticks < 0L then
+                Error(sprintf "the timestamp %s is before the year 1, which datetime2 cannot hold" s)
+            else
+                Ok(DateTime(ticks, DateTimeKind.Unspecified))
+
+    /// A `DateTime` the engine answered, as a canonical timestamp at `unit`: its fraction written at the
+    /// unit, never truncated. `Error` naming the value when it is finer than the unit holds.
+    let private instantText (unit: TimeUnit) (d: DateTime) : Result<string, string> =
+        let sinceEpoch = d.Ticks - epochTicks
+
+        let second =
+            sinceEpoch / ticksPerSecond
+            - (if sinceEpoch % ticksPerSecond < 0L then 1L else 0L)
+
+        let nanos = (sinceEpoch - second * ticksPerSecond) * 100L
+        let per = 1_000_000_000L / int64 (TimeUnit.scale unit)
+
+        if nanos % per <> 0L then
+            Error(
+                sprintf
+                    "the engine answered %s, finer than the column's %s"
+                    (d.ToString("yyyy-MM-dd'T'HH:mm:ss.fffffff", CultureInfo.InvariantCulture))
+                    (ColumnType.tag (TimestampType unit))
+            )
+        else
+            Ok(TemporalText.instantText unit (float second) (int (nanos / per)))
 
     /// The value a host binds for a parameter cell: `DBNull` for a null, a `DateTime` for a date or a
-    /// timestamp, a `decimal` for an exact decimal. `Error` for a decimal outside the range the .NET
-    /// decimal holds, which a host binds as text if its driver allows.
+    /// timestamp (a timestamp exact to its fraction), a `decimal` for an exact decimal. `Error` for a
+    /// decimal outside the range the .NET decimal holds, which a host binds as text if its driver
+    /// allows, and for a timestamp `datetime2` cannot hold.
     let parameterValue (c: Cell) : Result<obj, string> =
         match c with
         | Null -> Ok(box DBNull.Value)
@@ -349,7 +401,7 @@ module SqlServer =
         | Bool b -> Ok(box b)
         | Str s -> Ok(box s)
         | Date s -> Ok(box (DateTime.ParseExact(s, dateFormat, CultureInfo.InvariantCulture)))
-        | Timestamp s -> Ok(box (DateTime.ParseExact(s, timestampFormat, CultureInfo.InvariantCulture)))
+        | Timestamp s -> instantValue s |> Result.map box
         | Decimal s ->
             match Decimal.TryParse(s, NumberStyles.Number, CultureInfo.InvariantCulture) with
             | true, d -> Ok(box d)
@@ -357,7 +409,9 @@ module SqlServer =
 
     /// A result cell as the driver read it, decoded into the column type the statement selects. An
     /// `int` column read as a 64-bit value is a widened `Sum`, refused past int32 exactly as the
-    /// reference refuses it; a value of a shape the type does not admit is a named type error.
+    /// reference refuses it; a timestamp keeps its fraction at the column's unit, and one finer than
+    /// the unit is a named type error rather than truncated; a value of a shape the type does not admit
+    /// is a named type error.
     let decodeCell (ty: ColumnType) (value: obj) : Result<Cell, EvalError> =
         let unexpected () =
             Error(
@@ -388,8 +442,8 @@ module SqlServer =
             | StringType, (:? string as s) -> Ok(Str s)
             | DateType, (:? DateTime as d) -> Ok(Date(d.ToString(dateFormat, CultureInfo.InvariantCulture)))
             | DateType, (:? DateOnly as d) -> Ok(Date(d.ToString(dateFormat, CultureInfo.InvariantCulture)))
-            | TimestampType _, (:? DateTime as d) ->
-                Ok(Timestamp(d.ToString(timestampFormat, CultureInfo.InvariantCulture)))
+            | TimestampType unit, (:? DateTime as d) ->
+                instantText unit d |> Result.map Timestamp |> Result.mapError TypeError
             | DecimalType, (:? decimal as d) ->
                 match Cell.decimal (d.ToString(CultureInfo.InvariantCulture)) with
                 | Some c -> Ok c

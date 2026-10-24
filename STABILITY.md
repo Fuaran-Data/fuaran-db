@@ -266,3 +266,11 @@ Riding the draft (2026-10-24), on the same terms: the pins move to Core 0.40.3 a
   units.
 - **The posture, tightened — `DB-JOIN-KEY-UNIT`**: a declared join whose key columns state different units
   is a model defect. A model that states no unit, or one unit on both sides of each key, is unaffected.
+- **The posture, changed — a reported timestamp keeps its unit** (D12, the fourth amendment) in both
+  dialects' `columnType`: `datetime2(n)` and `timestamp(n)` read as the coarsest unit holding `n` digits,
+  a bare `datetime2` as nanoseconds, a bare `timestamp` as microseconds, `datetime` as milliseconds. Each
+  read as seconds before, so a model seeded from such a source sees a retype at its next drift check.
+- **The posture, changed — a timestamp value travels at its column's unit**: `parameterValue` binds a
+  sub-second timestamp exactly (it threw), and `decodeCell` keeps the engine's fraction at the column's
+  unit (it truncated to seconds), refusing a value finer than the unit as a named `TypeError`. Signatures
+  are unchanged; a seconds timestamp binds and decodes as before.

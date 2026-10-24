@@ -302,6 +302,48 @@ let tests =
               Expect.isSome (SqlServer.typeRefusal ns) "the type map refuses it"
               Expect.isSome (SqlServer.refuses (Construct.Parameter ns)) "a nanosecond parameter is refused"
 
+          testCase "a timestamp keeps its unit: read from the engine type, bound and decoded at the unit's fraction"
+          <| fun _ ->
+              let at = DateTime(2026, 6, 2, 9, 30, 15)
+
+              for unit, engineType, ticks, text in
+                  [ TimeUnit.Seconds, "datetime2(0)", 0L, "2026-06-02T09:30:15Z"
+                    TimeUnit.Milliseconds, "datetime2(3)", 1_230_000L, "2026-06-02T09:30:15.123Z"
+                    TimeUnit.Microseconds, "datetime2(6)", 1_234_560L, "2026-06-02T09:30:15.123456Z"
+                    TimeUnit.Nanoseconds, "datetime2(7)", 1_234_567L, "2026-06-02T09:30:15.1234567Z" ] do
+                  let ty = TimestampType unit
+                  let value = at.AddTicks ticks
+                  Expect.equal (SqlServer.columnType engineType) (Some ty) (sprintf "%s reads as %A" engineType unit)
+
+                  Expect.equal
+                      (SqlServer.decodeCell ty (box value))
+                      (Ok(Timestamp text))
+                      (sprintf "%A decodes whole" unit)
+
+                  match SqlServer.parameterValue (Timestamp text) with
+                  | Ok(:? DateTime as d) -> Expect.equal d value (sprintf "%A binds whole" unit)
+                  | other -> failtestf "%A: expected a DateTime, got %A" unit other
+
+              Expect.equal
+                  (SqlServer.decodeCell (TimestampType TimeUnit.Milliseconds) (box (at.AddTicks 1_200_000L)))
+                  (Ok(Timestamp "2026-06-02T09:30:15.12Z"))
+                  "the minimal text: no trailing zero"
+
+              Expect.equal
+                  (SqlServer.columnType "datetime2")
+                  (Some(TimestampType TimeUnit.Nanoseconds))
+                  "a bare datetime2 is seven digits"
+
+              Expect.equal (SqlServer.columnType "datetime") (Some(TimestampType TimeUnit.Milliseconds)) "datetime"
+              Expect.equal (SqlServer.columnType "smalldatetime") (Some(TimestampType TimeUnit.Seconds)) "minutes"
+
+              match SqlServer.decodeCell (TimestampType TimeUnit.Seconds) (box (at.AddTicks 5_000_000L)) with
+              | Error(TypeError why) -> Expect.stringContains why "finer than the column's timestamp" "named"
+              | other -> failtestf "a half second was not refused at seconds: %A" other
+
+              Expect.isError (SqlServer.parameterValue (Timestamp "2026-06-02T09:30:15.12345678Z")) "finer than a tick"
+              Expect.isError (SqlServer.parameterValue (Timestamp "0000-06-02T09:30:15Z")) "before the year 1"
+
           testCase "the type map: every column type to an engine type and back"
           <| fun _ ->
               for t in
@@ -311,6 +353,8 @@ let tests =
                     StringType
                     DateType
                     (TimestampType TimeUnit.Seconds)
+                    (TimestampType TimeUnit.Milliseconds)
+                    (TimestampType TimeUnit.Microseconds)
                     DecimalType ] do
                   Expect.equal (SqlServer.columnType (SqlServer.mapType t)) (Some t) (ColumnType.tag t)
 

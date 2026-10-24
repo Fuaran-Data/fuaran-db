@@ -123,6 +123,32 @@ unit-blind now see units.
   first; this is the second check, not a replacement. The connection record still writes a statement's
   columns as name and type, so a replayed result states no unit; the wire is unchanged.
 
+**Amended 2026-10-24: a timestamp keeps its unit when reported and when it travels.** This closes the two
+things the second amendment left, on the condition it named: a millisecond or microsecond column created
+at its precision holds sub-second values, so the value path now follows the unit as the DDL does.
+
+- A reported timestamp keeps the unit its precision states, the coarsest that holds its digits
+  (`TimeUnit.ofDigits`). An unstated precision is the engine's default: six digits for PostgreSQL's
+  `timestamp` (microseconds), seven for SQL Server's `datetime2` (nanoseconds). SQL Server's `datetime`
+  reads as milliseconds (it rounds to 1/300 s, which three digits spell exactly) and `smalldatetime` as
+  seconds. Reading a bare `datetime2` as nanoseconds is deliberate: it is the only unit that holds a
+  100 ns value, so the column is honestly finer than the dialect can create, and a parameter of its type is
+  the refused construct `5800dd7` made it. A source whose timestamps were seeded as seconds before this
+  change now reports a finer unit, which `Drift.check` shows as a retype: the source states it, and the
+  model said otherwise.
+- A timestamp value travels at the column's unit. `parameterValue` binds a `DateTime` exact to the cell's
+  fraction (refusing, by name, a fraction finer than the engine keeps: 100 ns in SQL Server, 1 microsecond
+  in PostgreSQL), where it parsed seconds text and threw on a fraction. `decodeCell` writes the engine's
+  value at the column's unit in Core's minimal text (`TemporalText.instantText`), and refuses one finer than
+  the unit as a named `TypeError` rather than truncate it, which is what it did.
+- Nanoseconds stay refused by name as a column and as a parameter, as the second amendment decided.
+
+A test per unit per dialect pins the reading, the binding and the decoding; the armed PostgreSQL leg
+creates a column at each unit, reads its unit back through `format_type`, and round-trips an instant at the
+unit's full precision. SQL Server has no armed leg here, so its value path is pinned against the driver's
+`DateTime` only. *Reopen if* a driver hands a timestamp as something other than a `DateTime`, or a host
+needs a nanosecond column read exactly.
+
 ## 2026-10-12 — D11: PostgreSQL, the second dialect (Phase 1906)
 
 `Fuaran.DB.Dialect.PostgreSql` is the second dialect. Its purpose is to find what the first left in the

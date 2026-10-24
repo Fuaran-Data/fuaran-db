@@ -61,17 +61,25 @@ module PostgreSql =
         | DecimalType -> "numeric"
 
     let private modifiers = Regex(@"\([^)]*\)")
+    let private precisionOf = Regex(@"\(\s*(\d+)\s*\)")
 
-    /// The other direction: the column type an engine type name reads as, ignoring its length,
-    /// precision and scale, or `None` for a type the columnar model has no column for (`bigint`, which
-    /// outgrows int32; `timestamp with time zone`, which carries an offset; `character`, which compares
-    /// with its padding ignored; `money`, which formats by the session's locale; binary and the rest).
+    /// The other direction: the column type an engine type name reads as, ignoring its length and
+    /// scale, or `None` for a type the columnar model has no column for (`bigint`, which outgrows int32;
+    /// `timestamp with time zone`, which carries an offset; `character`, which compares with its padding
+    /// ignored; `money`, which formats by the session's locale; binary and the rest). A timestamp keeps
+    /// the unit its precision states: `timestamp(n)` is the coarsest unit holding `n` fractional digits,
+    /// and a bare `timestamp` is the engine's default of six (microseconds).
     let columnType (engineType: string) : ColumnType option =
+        let t = engineType.Trim().ToLowerInvariant()
+
         let name =
-            modifiers
-                .Replace(engineType.Trim().ToLowerInvariant(), "")
-                .Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            modifiers.Replace(t, "").Split(' ', StringSplitOptions.RemoveEmptyEntries)
             |> String.concat " "
+
+        let precision =
+            let m = precisionOf.Match t
+
+            if m.Success then int m.Groups[1].Value else 6
 
         match name with
         | "integer"
@@ -90,7 +98,7 @@ module PostgreSql =
         | "character varying" -> Some StringType
         | "date" -> Some DateType
         | "timestamp"
-        | "timestamp without time zone" -> Some(TimestampType TimeUnit.Seconds)
+        | "timestamp without time zone" -> Some(TimestampType(TimeUnit.ofDigits precision))
         | "numeric"
         | "decimal" -> Some DecimalType
         | _ -> None
@@ -350,12 +358,52 @@ module PostgreSql =
     // ---- what a host needs to bind and to read ----
 
     let private dateFormat = "yyyy-MM-dd"
-    let private timestampFormat = "yyyy-MM-dd'T'HH:mm:ss'Z'"
+    let private epochTicks = DateTime(1970, 1, 1).Ticks
+    let private ticksPerSecond = 10_000_000L
+
+    /// A canonical timestamp as the `DateTime` the engine stores, exact to its fraction: `timestamp`
+    /// keeps the microsecond. `Error` for a text that is not canonical, an instant before the year 1, or
+    /// a fraction finer than a microsecond.
+    let private instantValue (s: string) : Result<DateTime, string> =
+        match TemporalText.tryInstant TimeUnit.Nanoseconds s with
+        | None -> Error(sprintf "the timestamp %s is not canonical" s)
+        | Some(_, nanos) when nanos % 1000 <> 0 ->
+            Error(sprintf "the timestamp %s is finer than PostgreSQL's timestamp, which keeps 1 microsecond" s)
+        | Some(second, nanos) ->
+            let ticks = epochTicks + int64 second * ticksPerSecond + int64 (nanos / 100)
+
+            if ticks < 0L then
+                Error(sprintf "the timestamp %s is before the year 1, which a .NET DateTime cannot hold" s)
+            else
+                Ok(DateTime(ticks, DateTimeKind.Unspecified))
+
+    /// A `DateTime` the engine answered, as a canonical timestamp at `unit`: its fraction written at the
+    /// unit, never truncated. `Error` naming the value when it is finer than the unit holds.
+    let private instantText (unit: TimeUnit) (d: DateTime) : Result<string, string> =
+        let sinceEpoch = d.Ticks - epochTicks
+
+        let second =
+            sinceEpoch / ticksPerSecond
+            - (if sinceEpoch % ticksPerSecond < 0L then 1L else 0L)
+
+        let nanos = (sinceEpoch - second * ticksPerSecond) * 100L
+        let per = 1_000_000_000L / int64 (TimeUnit.scale unit)
+
+        if nanos % per <> 0L then
+            Error(
+                sprintf
+                    "the engine answered %s, finer than the column's %s"
+                    (d.ToString("yyyy-MM-dd'T'HH:mm:ss.fffffff", CultureInfo.InvariantCulture))
+                    (ColumnType.tag (TimestampType unit))
+            )
+        else
+            Ok(TemporalText.instantText unit (float second) (int (nanos / per)))
 
     /// The value a host binds for a parameter cell: `DBNull` for a null, a `DateOnly` for a date, a
-    /// `DateTime` of unspecified kind for a timestamp (a `timestamp without time zone`), a `decimal` for
-    /// an exact decimal. `Error` for a decimal outside the range the .NET decimal holds, which a host
-    /// binds as text if its driver allows.
+    /// `DateTime` of unspecified kind for a timestamp (a `timestamp without time zone`, exact to its
+    /// fraction), a `decimal` for an exact decimal. `Error` for a decimal outside the range the .NET
+    /// decimal holds, which a host binds as text if its driver allows, and for a timestamp the engine
+    /// cannot hold.
     let parameterValue (c: Cell) : Result<obj, string> =
         match c with
         | Null -> Ok(box DBNull.Value)
@@ -364,15 +412,7 @@ module PostgreSql =
         | Bool b -> Ok(box b)
         | Str s -> Ok(box s)
         | Date s -> Ok(box (DateOnly.ParseExact(s, dateFormat, CultureInfo.InvariantCulture)))
-        | Timestamp s ->
-            Ok(
-                box (
-                    DateTime.SpecifyKind(
-                        DateTime.ParseExact(s, timestampFormat, CultureInfo.InvariantCulture),
-                        DateTimeKind.Unspecified
-                    )
-                )
-            )
+        | Timestamp s -> instantValue s |> Result.map box
         | Decimal s ->
             match Decimal.TryParse(s, NumberStyles.Number, CultureInfo.InvariantCulture) with
             | true, d -> Ok(box d)
@@ -380,7 +420,9 @@ module PostgreSql =
 
     /// A result cell as the driver read it, decoded into the column type the statement selects. An
     /// `int` column read as a 64-bit value is a `count` or a `sum`, refused past int32 exactly as the
-    /// reference refuses a sum; a value of a shape the type does not admit is a named type error.
+    /// reference refuses a sum; a timestamp keeps its fraction at the column's unit, and one finer than
+    /// the unit is a named type error rather than truncated; a value of a shape the type does not admit
+    /// is a named type error.
     let decodeCell (ty: ColumnType) (value: obj) : Result<Cell, EvalError> =
         let unexpected () =
             Error(
@@ -410,8 +452,8 @@ module PostgreSql =
             | StringType, (:? string as s) -> Ok(Str s)
             | DateType, (:? DateOnly as d) -> Ok(Date(d.ToString(dateFormat, CultureInfo.InvariantCulture)))
             | DateType, (:? DateTime as d) -> Ok(Date(d.ToString(dateFormat, CultureInfo.InvariantCulture)))
-            | TimestampType _, (:? DateTime as d) ->
-                Ok(Timestamp(d.ToString(timestampFormat, CultureInfo.InvariantCulture)))
+            | TimestampType unit, (:? DateTime as d) ->
+                instantText unit d |> Result.map Timestamp |> Result.mapError TypeError
             | DecimalType, (:? decimal as d) ->
                 match Cell.decimal (d.ToString(CultureInfo.InvariantCulture)) with
                 | Some c -> Ok c
