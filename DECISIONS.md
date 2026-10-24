@@ -172,6 +172,27 @@ A decoder older than this change refuses a result column that states a unit, by 
 (`DB-WIRE-UNKNOWN-FIELD`), as it refuses any member it does not know. *Reopen if* a record must be read by
 such a decoder; the units would then need to travel beside the columns rather than in them.
 
+**Amended 2026-10-24: SQL Server's timestamp path, proved on an engine.** The third amendment pinned SQL
+Server's value path against the driver's `DateTime` only. The armed SQL Server leg now carries the twin of
+the PostgreSQL test, run against SQL Server 2025 LocalDB 17.0.4025.3 (Express Edition, 64-bit), with the
+connection made as ruling D11.6 records. The engine agreed with the code everywhere; nothing in the dialect
+changed.
+
+- A column the dialect creates at seconds, milliseconds and microseconds (`datetime2(0)`, `(3)`, `(6)`)
+  reports its unit back through the catalog (`sys.columns`), and an instant bound at the unit's full
+  precision (`…:15`, `…:15.123`, `…:15.123456`) reads back whole through `decodeCell`.
+- A `datetime` column, created with raw DDL, reports milliseconds. A millisecond the engine cannot hold
+  exactly reads back as bound: `.123` is stored as 37/300 s, and the driver hands it back as `.123`, not as
+  the 123.333… ms the engine keeps, so the reading of `datetime` as milliseconds holds at the driver, which
+  is the only place a host meets it.
+- A `smalldatetime` column, created with raw DDL, reports seconds, and a whole minute reads back whole. The
+  engine rounds a bound value to the minute, so `…:30:15` reads back as `…:30:00`, still at seconds. The
+  test pins that rounding as the engine's; a host that writes into such a column does so through DDL the
+  dialect never emits, since the dialect creates timestamps as `datetime2`.
+
+The test was seen red once, with `datetime` read as seconds. *Reopen if* another server version or driver
+hands `datetime` back at a finer fraction than the millisecond.
+
 ## 2026-10-12 — D11: PostgreSQL, the second dialect (Phase 1906)
 
 `Fuaran.DB.Dialect.PostgreSql` is the second dialect. Its purpose is to find what the first left in the

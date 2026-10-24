@@ -231,6 +231,108 @@ let runAgainstServer (dialect: Dialect) (connectionString: string) : Report * st
 
         nonQuery master ("DROP DATABASE " + SqlServer.quote database)
 
+/// The engine type of column `at` in `table`, as the catalog reports it: `datetime2` with its fractional
+/// digits, any other type by its bare name.
+let private reportedType (conn: SqlConnection) (table: string) : string =
+    use cmd =
+        new SqlCommand(
+            "SELECT CASE WHEN TYPE_NAME(c.user_type_id) = 'datetime2' THEN 'datetime2(' + CAST(c.scale AS nvarchar(4)) + ')' ELSE TYPE_NAME(c.user_type_id) END FROM sys.columns AS c WHERE c.object_id = OBJECT_ID(@t) AND c.name = 'at'",
+            conn
+        )
+
+    cmd.Parameters.AddWithValue("@t", SqlServer.quote table) |> ignore
+    cmd.ExecuteScalar() :?> string
+
+/// Binds `text` into column `at` of `table` at `ty`, then reads the column back through `decodeCell`.
+let private bindAndRead (conn: SqlConnection) (table: string) (ty: ColumnType) (text: string) =
+    nonQuery conn ("DELETE FROM " + SqlServer.quote table)
+    use insert = new SqlCommand(SqlServer.insertRow table [ "at" ], conn)
+    addParameter insert (SqlServer.marker 0) ty (Timestamp text)
+    insert.ExecuteNonQuery() |> ignore
+
+    use select =
+        new SqlCommand("SELECT " + SqlServer.quote "at" + " FROM " + SqlServer.quote table, conn)
+
+    SqlServer.decodeCell ty (select.ExecuteScalar())
+
+/// One instant per unit the dialect creates, at the unit's full precision.
+let private timestampsByUnit =
+    [ TimeUnit.Seconds, "2026-06-02T09:30:15Z"
+      TimeUnit.Milliseconds, "2026-06-02T09:30:15.123Z"
+      TimeUnit.Microseconds, "2026-06-02T09:30:15.123456Z" ]
+
+/// In a database made for the run: a column the dialect creates at each unit reports that unit back
+/// through the catalog, and an instant bound at the unit's full precision reads back whole; a `datetime`
+/// and a `smalldatetime` column, created with raw DDL, report and read back at milliseconds and seconds.
+let timestampRoundTrip (connectionString: string) =
+    let database = "fuaran_db_units_" + Guid.NewGuid().ToString("N").Substring(0, 12)
+
+    use master = new SqlConnection(connectionString)
+    master.Open()
+    nonQuery master ("CREATE DATABASE " + SqlServer.quote database)
+
+    try
+        let builder = SqlConnectionStringBuilder(connectionString)
+        builder.InitialCatalog <- database
+        builder.Pooling <- false
+        use conn = new SqlConnection(builder.ConnectionString)
+        conn.Open()
+
+        for unit, text in timestampsByUnit do
+            let ty = TimestampType unit
+            let table = "at_" + ColumnType.tag ty
+
+            match SqlServer.createTable table [ "at", ty ] with
+            | Ok ddl -> nonQuery conn ddl
+            | Error why -> failtestf "%A: refused: %s" unit why
+
+            let engineType = reportedType conn table
+            Expect.equal (SqlServer.columnType engineType) (Some ty) (sprintf "%s reports %A" engineType unit)
+            Expect.equal (bindAndRead conn table ty text) (Ok(Timestamp text)) (sprintf "%A reads back whole" unit)
+
+        // `datetime` keeps 1/300 s and `smalldatetime` whole minutes. Each reports the unit that holds
+        // what it keeps. A millisecond bound into `datetime` is stored at the nearest 1/300 s, which the
+        // driver hands back rounded to the millisecond it was (.123 is stored as 37/300 s and read as
+        // .123). `smalldatetime` rounds a bound value to the minute, so only a whole minute reads back
+        // whole; any other second reads back as the minute the engine kept, still at seconds.
+        for table, unit, bound, read in
+            [ "at_datetime", TimeUnit.Milliseconds, "2026-06-02T09:30:15.123Z", "2026-06-02T09:30:15.123Z"
+              "at_datetime", TimeUnit.Milliseconds, "2026-06-02T09:30:15.12Z", "2026-06-02T09:30:15.12Z"
+              "at_smalldatetime", TimeUnit.Seconds, "2026-06-02T09:30:00Z", "2026-06-02T09:30:00Z"
+              "at_smalldatetime", TimeUnit.Seconds, "2026-06-02T09:30:15Z", "2026-06-02T09:30:00Z" ] do
+            let engineType = table.Substring 3
+            let ty = TimestampType unit
+
+            nonQuery
+                conn
+                ("IF OBJECT_ID(N'"
+                 + table
+                 + "') IS NULL CREATE TABLE "
+                 + SqlServer.quote table
+                 + " ([at] "
+                 + engineType
+                 + " NULL)")
+
+            Expect.equal
+                (SqlServer.columnType (reportedType conn table))
+                (Some ty)
+                (sprintf "%s reports %A" engineType unit)
+
+            Expect.equal
+                (bindAndRead conn table ty bound)
+                (Ok(Timestamp read))
+                (sprintf "%s reads %s back" engineType bound)
+    finally
+        SqlConnection.ClearAllPools()
+
+        nonQuery
+            master
+            ("ALTER DATABASE "
+             + SqlServer.quote database
+             + " SET SINGLE_USER WITH ROLLBACK IMMEDIATE")
+
+        nonQuery master ("DROP DATABASE " + SqlServer.quote database)
+
 [<Tests>]
 let tests =
     testList
@@ -571,7 +673,12 @@ let tests =
            | connectionString ->
                testList
                    "ARMED"
-                   [ testCase "the kit against the configured SQL Server agrees, or differs only as pinned"
+                   [ // A timestamp keeps its unit through the engine: a column created at each unit reports
+                     // that unit back, and an instant bound at it reads back whole.
+                     testCase "a timestamp column at each unit reports its unit and round-trips its fraction"
+                     <| fun _ -> timestampRoundTrip connectionString
+
+                     testCase "the kit against the configured SQL Server agrees, or differs only as pinned"
                      <| fun _ ->
                          let report, version, collation = runAgainstServer SqlServer.dialect connectionString
                          let a, p, u = Kit.counts report
