@@ -237,6 +237,29 @@ let drive (m: ModelNode) (execute: Execute) : Session =
 
 let private opsOf (s: Session) = s.Records |> List.map _.Op
 
+let private unitOf (text: string) : UnitOfMeasure =
+    match Unit.parse text with
+    | Ok u -> u
+    | Error e -> failwithf "unit '%s' refused: %A" text e
+
+/// The fully recordable worked model with the order amount stated in kilograms: a record whose
+/// statement columns carry a unit.
+let measuredModel: ModelNode =
+    modelWith [ "public"; "personal" ] "personal"
+    |> Sample.replace "c:orders.amount" (fun n ->
+        match n.Kind with
+        | NodeKind.Column c ->
+            { n with
+                Kind =
+                    NodeKind.Column
+                        { c with
+                            Field = c.Field |> Field.withUnit (unitOf "kg") } }
+        | _ -> failwith "c:orders.amount is not a column")
+
+/// The worked session over the measured model.
+let measured () =
+    drive measuredModel (engine measuredModel (ref 0))
+
 let private seed = 19030
 let private iterations = 300
 
@@ -809,7 +832,98 @@ let tests =
                   ModelRules.RecordableUndeclared
                   "a recordable classification the model does not declare"
 
-              Expect.isEmpty (ModelRules.check model |> List.map _.Code) "the worked model is clean" ]
+              Expect.isEmpty (ModelRules.check model |> List.map _.Code) "the worked model is clean"
+
+          testCase "the record writes each result column's field, and a replayed result is unit-checked like a live one"
+          <| fun _ ->
+              let s = measured ()
+              let _, state = SessionWire.read (Some s.Head) (Export.wire s.Records) |> ok "read"
+              let q1 = state.Requests.["q1"]
+              let st, _ = q1.Statement.Value
+
+              Expect.equal
+                  (st.Columns |> List.map (fun f -> f.Name, f.Unit))
+                  [ "order_id", None
+                    "customer_id", None
+                    "amount", Some(unitOf "kg")
+                    "channel", None
+                    "updated_at", None ]
+                  "the amount states kilograms, read back off the wire"
+
+              match Session.replay state "q1" with
+              | ReplayVerdict.Reached _ -> ()
+              | other -> failtestf "q1: %A" other
+
+              // A suffix comparing the kilograms with pounds. Admission refuses such a pipeline before it
+              // is lowered, so it is placed here by hand: the live local step refuses it over the
+              // statement's result, and the replay refuses it over the recorded one.
+              let mixed =
+                  [ Filter(Binary(Gt, Col "amount", Convert(Lit(Float 1.0), unitOf "[lb_av]"))) ]
+
+              let rows =
+                  match q1.Rows with
+                  | Some(Recorded.Recorded rows) -> rows
+                  | other -> failtestf "q1's rows were not recorded: %A" other
+
+              let live =
+                  match
+                      FoldSplit.lowerUnchecked
+                          measuredModel
+                          ReferenceDialect.dialect
+                          (Ref "orders")
+                          (publicPipeline 10)
+                          Bindings.none
+                          None
+                  with
+                  | Ok l -> { l with Suffix = mixed }
+                  | Error r -> failtestf "refused whole: %s" (Refusal.describe r)
+
+              match Statement.toTable live.Statement rows with
+              | Error e -> failtestf "the live result was not read: %A" e
+              | Ok result ->
+                  match FoldSplit.finish live (fun n -> Error(UnresolvedSource n)) Bindings.none result with
+                  | Error(UnitMismatch _) -> ()
+                  | other -> failtestf "the live step admitted kilograms against pounds: %A" other
+
+              let tampered =
+                  { state with
+                      Requests =
+                          state.Requests
+                          |> Map.add
+                              "q1"
+                              { q1 with
+                                  Split = Some { q1.Split.Value with Suffix = mixed } } }
+
+              match Session.replay tampered "q1" with
+              | ReplayVerdict.Unevaluable code -> Expect.equal code "DB-SESSION-EVAL-UNITMISMATCH" "the unit check"
+              | other -> failtestf "the replay admitted kilograms against pounds: %A" other
+
+          testCase "a record written before result columns carried fields still reads, and replays stating no unit"
+          <| fun _ ->
+              let text =
+                  IO.File.ReadAllText(
+                      IO.Path.Combine(CorpusTests.fixturesDir (), "session", "legacy", "before-units.jsonl")
+                  )
+
+              let records, state =
+                  match SessionWire.read None text with
+                  | Ok r -> r
+                  | Error e -> failtestf "the earlier record did not read: %s" (SessionWire.describeFault e)
+
+              Expect.equal (SessionWire.write records) text "it re-writes to its own bytes"
+
+              let columns =
+                  state.Requests
+                  |> Map.toList
+                  |> List.choose (fun (_, r) -> r.Statement)
+                  |> List.collect (fun (st, _) -> st.Columns)
+
+              Expect.isNonEmpty columns "it records statement columns"
+              Expect.isTrue (columns |> List.forall (fun f -> f.Unit.IsNone)) "none states a unit"
+
+              match Session.replay state "q1" with
+              | ReplayVerdict.Reached _ -> ()
+              | other -> failtestf "q1: %A" other ]
 
 // ---- the corpus vectors (`--write-fixtures`) ----
 
@@ -834,10 +948,19 @@ let corpusOps () : (string * string) list =
         let op = ops |> List.find (fun o -> SessionOps.tag o = tag)
         sprintf "%02d-%s" (i + 1) tag, SessionWire.encodeOp op)
 
-/// The worked sessions as canonical wire.
+/// The worked sessions as canonical wire, the last over the measured model: its statements' columns
+/// carry their fields, the amount stating kilograms.
 let corpusStreams () : (string * string) list =
     [ "worked", Export.wire (worked ()).Records
-      "recordable", Export.wire (recordable ()).Records ]
+      "recordable", Export.wire (recordable ()).Records
+      "measured", Export.wire (measured ()).Records ]
+
+/// The measured session's `ran` op: a statement record whose result columns carry their fields.
+let corpusMeasuredRan () : string =
+    measured ()
+    |> opsOf
+    |> List.find (fun o -> SessionOps.tag o = "ran")
+    |> SessionWire.encodeOp
 
 /// Reader refusals: `(name, as, input, expected head, code)`.
 let corpusRejects () : (string * string * string * string option * string) list =
@@ -861,7 +984,7 @@ let corpusRejects () : (string * string * string * string option * string) list 
                   { Hash = SessionHash.digest "s"
                     Text = "SELECT 1"
                     Parameters = [ "@p0", StringType ]
-                    Columns = [ "email", StringType ]
+                    Columns = [ Field.create "email" StringType ]
                     TimeoutSeconds = Some 30
                     CaptureKey = None },
                   "t"

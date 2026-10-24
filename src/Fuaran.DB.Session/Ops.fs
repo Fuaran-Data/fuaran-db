@@ -68,8 +68,10 @@ type StatementRecord =
         Text: string
         /// Each parameter's marker and type, in ordinal order.
         Parameters: (string * ColumnType) list
-        /// The result columns, in the pipeline's names, with their types.
-        Columns: (string * ColumnType) list
+        /// The result columns as fields, in the pipeline's names: each column's type, and its unit,
+        /// label and description where the statement's output states them (`Statement.schema`), so a
+        /// result replayed from the record is unit-checked as the live one was.
+        Columns: Field list
         /// The statement timeout, in seconds.
         TimeoutSeconds: int option
         /// The capture key (`SessionHash.captureKey`), written only when the parameter values are

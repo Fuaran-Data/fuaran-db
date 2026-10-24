@@ -274,3 +274,13 @@ Riding the draft (2026-10-24), on the same terms: the pins move to Core 0.40.3 a
   sub-second timestamp exactly (it threw), and `decodeCell` keeps the engine's fraction at the column's
   unit (it truncated to seconds), refusing a value finer than the unit as a named `TypeError`. Signatures
   are unchanged; a seconds timestamp binds and decodes as before.
+- **Breaking — `StatementRecord.Columns` is a `Field list`** (D12, the fifth amendment), where it was
+  `(string * ColumnType) list`: the statement's schema, units included. A full-literal construction stops
+  compiling; `Field.create name ty` builds the column the old pair did. `Session.replay` now runs the
+  recorded suffix's unit check over the recorded units.
+- **Additive — the connection record's wire**: a statement's result column is Core's field document and
+  may carry `unit`, `label`, `description` and `ext`, each written only when stated. A column stating none
+  is written as before, so every existing vector keeps its bytes, and a record written before this draft
+  still reads (`session/legacy/`). The new vectors are `session/streams/measured.jsonl` and
+  `session/measured/ran.json`. A decoder older than this draft refuses a result column that states any of
+  them, by name.

@@ -58,9 +58,10 @@ module SessionWire =
     let private typedPair (name: string, ty: ColumnType) =
         JObj [ "name", JStr name; "type", JStr(ColumnType.tag ty) ]
 
-    /// A reported field as Core's field document (`ColumnCodec.fieldJson`): its name and type, and
-    /// the unit, label, description and extension members only when stated, so a field stating none
-    /// is the `typedPair` it was before fields carried metadata.
+    /// A reported field, or a statement's result column, as Core's field document
+    /// (`ColumnCodec.fieldJson`): its name and type, and the unit, label, description and extension
+    /// members only when stated, so a field stating none is the `typedPair` it was before fields
+    /// carried metadata.
     let private fieldJson (f: Field) = ColumnCodec.fieldJson f
 
     let private columnRefJson (c: ColumnRef) =
@@ -176,7 +177,7 @@ module SessionWire =
             [ "hash", JStr s.Hash
               "text", JStr s.Text
               "parameters", JArr(s.Parameters |> List.map typedPair)
-              "columns", JArr(s.Columns |> List.map typedPair) ]
+              "columns", JArr(s.Columns |> List.map fieldJson) ]
             @ optional "timeoutSeconds" (s.TimeoutSeconds |> Option.map JInt)
             @ optional "captureKey" (s.CaptureKey |> Option.map JStr)
         )
@@ -388,8 +389,10 @@ module SessionWire =
             return name, ty
         }
 
-    /// A reported field, strictly: the inverse of `fieldJson`. The type is checked here so an unknown
-    /// one is refused as it always was; the metadata members go through Core's field codec.
+    /// A reported field or a statement's result column, strictly: the inverse of `fieldJson`. The type
+    /// is checked here so an unknown one is refused as it always was; the metadata members go through
+    /// Core's field codec. A column written as name and type alone, before result columns carried
+    /// fields, reads as a field stating nothing.
     let private fieldOf (path: string) (v: JVal) : Result<Field, WireError> =
         result {
             let! fs = fieldsOf path v
@@ -406,6 +409,10 @@ module SessionWire =
     let private typedPairs (path: string) (name: string) fs =
         arr path name fs
         |> Result.bind (traverse (fun i v -> typedPairOf (sprintf "%s.%s[%d]" path name i) v))
+
+    let private fieldsAt (path: string) (name: string) fs =
+        arr path name fs
+        |> Result.bind (traverse (fun i v -> fieldOf (sprintf "%s.%s[%d]" path name i) v))
 
     let private columnRefOf (path: string) (v: JVal) : Result<ColumnRef, WireError> =
         result {
@@ -603,9 +610,7 @@ module SessionWire =
                     do! only p [ "name"; "columns" ] fs
                     let! name = str p "name" fs
 
-                    let! columns =
-                        arr p "columns" fs
-                        |> Result.bind (traverse (fun i v -> fieldOf (sprintf "%s.columns[%d]" p i) v))
+                    let! columns = fieldsAt p "columns" fs
 
                     return { Name = name; Columns = columns }
                 })
@@ -674,7 +679,7 @@ module SessionWire =
             let! hash = str path "hash" fs
             let! text = str path "text" fs
             let! parameters = typedPairs path "parameters" fs
-            let! columns = typedPairs path "columns" fs
+            let! columns = fieldsAt path "columns" fs
             let! timeout = optInt path "timeoutSeconds" fs
             let! key = optStr path "captureKey" fs
 

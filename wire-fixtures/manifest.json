@@ -34,8 +34,22 @@
       "id": "session-streams",
       "kind": "accept-session",
       "path": "session/streams",
-      "vectors": 2,
-      "description": "Worked sessions as canonical JSONL chains (SHA-256, no trailing newline): one over a model marking only 'public' recordable, whose personal request is recorded with its values withheld, and one marking every classification recordable. Each reads, verifies, folds and re-writes to its own bytes."
+      "vectors": 3,
+      "description": "Worked sessions as canonical JSONL chains (SHA-256, no trailing newline): one over a model marking only 'public' recordable, whose personal request is recorded with its values withheld, one marking every classification recordable, and one over the same model with the order amount stated in kilograms, whose statements' result columns carry their fields. Each reads, verifies, folds and re-writes to its own bytes."
+    },
+    {
+      "id": "session-measured",
+      "kind": "accept-session-op",
+      "path": "session/measured",
+      "vectors": 1,
+      "description": "A 'ran' op whose statement's result columns are Core fields, each member beyond name and type written only when stated: the amount states its unit."
+    },
+    {
+      "id": "session-legacy",
+      "kind": "accept-session",
+      "path": "session/legacy",
+      "vectors": 1,
+      "description": "A worked session as the record was written before a statement's result columns carried fields, frozen and never regenerated: it must still read, verify, fold and re-write to its own bytes."
     },
     {
       "id": "session-rejects",

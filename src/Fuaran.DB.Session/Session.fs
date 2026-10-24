@@ -310,7 +310,7 @@ module Session =
                 { Hash = hash
                   Text = statement.Text
                   Parameters = statement.Parameters |> List.map (fun p -> p.Marker, p.Type)
-                  Columns = statement.Columns |> List.map (fun o -> o.Name, o.Type)
+                  Columns = Statement.schema statement
                   TimeoutSeconds = statement.TimeoutSeconds
                   CaptureKey =
                     if recordable && not (List.isEmpty values) then
@@ -434,15 +434,16 @@ module Session =
               Some split,
               Some(Outcome.Finished(_, ResultDigest.Plain recorded, _)) ->
                 // A captured cell its column's type cannot hold is refused as the table's validation
-                // would refuse it, never thrown.
+                // would refuse it, never thrown. The schema is the recorded fields, units included, so
+                // the suffix meets the evaluator's unit check as it did live.
                 let table =
                     st.Columns
-                    |> List.mapi (fun j (name, ty) -> Column.ofCells name ty (rows |> List.map (List.item j)))
+                    |> List.mapi (fun j f -> Column.ofCells f.Name f.Type (rows |> List.map (List.item j)))
                     |> List.fold
                         (fun acc c -> acc |> Result.bind (fun cs -> c |> Result.map (fun c -> c :: cs)))
                         (Ok [])
                     |> Result.map (fun columns ->
-                        { Schema = st.Columns |> List.map (fun (name, ty) -> Field.create name ty)
+                        { Schema = st.Columns
                           Columns = List.rev columns })
 
                 let refuse name = Error(EvalError.UnresolvedSource name)

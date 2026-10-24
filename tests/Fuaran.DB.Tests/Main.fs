@@ -59,6 +59,11 @@ let private writeFixtures () =
     for name, text in SessionTests.corpusOps () do
         write "session/ops" name text
 
+    write "session/measured" "ran" (SessionTests.corpusMeasuredRan ())
+
+    // `session/legacy/` is NOT written here: it is a record as an earlier draft wrote it, frozen, so a
+    // change to the record's form cannot regenerate the evidence that the earlier form still reads.
+
     for name, text in SessionTests.corpusStreams () do
         let path = Path.Combine(dir, "session", "streams", name + ".jsonl")
         Directory.CreateDirectory(Path.GetDirectoryName path) |> ignore

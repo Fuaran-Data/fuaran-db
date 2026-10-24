@@ -34,7 +34,7 @@ module StreamLaws =
         { Hash = SessionHash.digest "s"
           Text = "SELECT a FROM t WHERE a = @p0"
           Parameters = if withParams then [ "@p0", IntType ] else []
-          Columns = [ "a", IntType ]
+          Columns = [ Field.create "a" IntType ]
           TimeoutSeconds = Some 30
           CaptureKey = if keyed then Some(SessionHash.digest "s" + "#k") else None }
 

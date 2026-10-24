@@ -149,6 +149,29 @@ unit's full precision. SQL Server has no armed leg here, so its value path is pi
 `DateTime` only. *Reopen if* a driver hands a timestamp as something other than a `DateTime`, or a host
 needs a nanosecond column read exactly.
 
+**Amended 2026-10-24: the connection record keeps a result column's unit.** This closes what the third
+amendment left: the record wrote a statement's result columns as name and type, so a result replayed from
+it stated no unit and the local suffix's unit check could not run on it.
+
+- `StatementRecord.Columns` is the statement's schema (`Statement.schema`), a `Field list`, where it was
+  `(name, type)` pairs. `Session.replay` builds the replayed table over those fields, so the recorded
+  suffix meets the evaluator's unit check exactly as the live step did: a suffix comparing kilograms with
+  pounds is `UnitMismatch` live and `DB-SESSION-EVAL-UNITMISMATCH` on replay.
+- The wire writes each result column as Core's field document (`ColumnCodec.fieldJson`), the spelling the
+  reported schema already uses (D12.3): name and type, then unit, label, description and `ext` only when
+  stated. A column stating none is written as the name-and-type pair it was, so every existing vector,
+  the worked streams among them, kept its bytes on regeneration, and the statement hash, which never
+  covered the columns, is unchanged.
+- A record written before this change still reads: a name-and-type column decodes as a field stating
+  nothing. `session/legacy/before-units.jsonl` pins it. It is the worked stream as the code before this
+  change wrote it, frozen, and `--write-fixtures` never regenerates it, so a later change to the record's
+  form cannot rewrite its own evidence. The new form is pinned by `session/streams/measured.jsonl` and
+  `session/measured/ran.json`, over the worked model with the order amount in kilograms.
+
+A decoder older than this change refuses a result column that states a unit, by name
+(`DB-WIRE-UNKNOWN-FIELD`), as it refuses any member it does not know. *Reopen if* a record must be read by
+such a decoder; the units would then need to travel beside the columns rather than in them.
+
 ## 2026-10-12 — D11: PostgreSQL, the second dialect (Phase 1906)
 
 `Fuaran.DB.Dialect.PostgreSql` is the second dialect. Its purpose is to find what the first left in the
