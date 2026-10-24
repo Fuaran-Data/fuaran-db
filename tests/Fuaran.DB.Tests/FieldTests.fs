@@ -8,6 +8,7 @@ open Expecto
 open Fuaran.Core
 open Fuaran.Compute
 open Fuaran.DB
+open Fuaran.DB.Provider
 open Fuaran.DB.Session
 
 let private unitOf (text: string) : UnitOfMeasure =
@@ -337,4 +338,75 @@ let tests =
 
               match SessionWire.decodeOp text with
               | Ok back -> Expect.equal back op "the same op"
-              | Error e -> failtestf "%s" (ModelWire.describe e) ]
+              | Error e -> failtestf "%s" (ModelWire.describe e)
+
+          testCase "a declared join whose key columns state different units is a model defect (DB-JOIN-KEY-UNIT)"
+          <| fun _ ->
+              let defects (root: ModelNode) =
+                  ModelRules.check root |> List.map (fun d -> d.Code, d.Node)
+
+              Expect.equal
+                  (defects freight)
+                  [ ModelRules.JoinKeyUnit, Some "j:legs-routes" ]
+                  "metres related to kilometres, and nothing else"
+
+              let inMetres =
+                  freight
+                  |> Sample.replace "c:routes.dist_km" (fun _ -> measured "c:routes.dist_km" "dist_km" FloatType metre)
+
+              Expect.isEmpty (defects inMetres) "one unit on both sides"
+
+              let unstated =
+                  freight
+                  |> Sample.replace "c:routes.dist_km" (fun _ -> plain "c:routes.dist_km" "dist_km" FloatType)
+
+              Expect.isEmpty (defects unstated) "a side stating no unit matches anything"
+
+          testCase "the provider's result table carries each column's unit, and the local step re-checks it"
+          <| fun _ ->
+              let lower (pipeline: Transform list) =
+                  match
+                      FoldSplit.lowerUnchecked
+                          freight
+                          ReferenceDialect.dialect
+                          (Ref "shipments")
+                          pipeline
+                          Bindings.none
+                          None
+                  with
+                  | Ok l -> l
+                  | Error r -> failtestf "refused whole: %s" (Refusal.describe r)
+
+              let unitsOf (l: Lowered) =
+                  Statement.schema l.Statement
+                  |> List.map (fun f -> f.Name, f.Unit |> Option.map Unit.render)
+
+              let summed =
+                  lower
+                      [ Project [ "weight_kg", "w"; "id", "id" ]
+                        GroupBy(
+                            [ "id" ],
+                            [ { Name = "total"; Fn = Sum; Of = "w" }; { Name = "n"; Fn = Count; Of = "w" } ]
+                        ) ]
+
+              Expect.isEmpty summed.Suffix "the whole pipeline lowers"
+
+              Expect.equal
+                  (unitsOf summed)
+                  [ "id", None; "total", Some(Unit.render kg); "n", None ]
+                  "a renamed column keeps its unit; a sum states its operand's, a count none"
+
+              // `Derive` is outside the declared subset, so it runs locally over the statement's result.
+              let mixed = lower [ Derive("total", Binary(Add, Col "weight_kg", Col "weight_lb")) ]
+
+              Expect.equal
+                  (unitsOf mixed |> List.filter (fun (n, _) -> n.StartsWith "weight"))
+                  [ "weight_kg", Some(Unit.render kg); "weight_lb", Some(Unit.render lb) ]
+                  "the scanned columns carry the model's units"
+
+              match Statement.toTable mixed.Statement [] with
+              | Error e -> failtestf "the empty result was not read: %A" e
+              | Ok result ->
+                  match FoldSplit.finish mixed (fun n -> Error(UnresolvedSource n)) Bindings.none result with
+                  | Error(UnitMismatch _) -> ()
+                  | other -> failtestf "the local step admitted kilograms plus pounds: %A" other ]

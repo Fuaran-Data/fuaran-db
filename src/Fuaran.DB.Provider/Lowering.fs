@@ -38,8 +38,7 @@ module internal Lowering =
 
     let private mint (n: int) = "c" + string n
 
-    let schemaOf (cols: Col list) : Schema =
-        cols |> List.map (fun c -> Field.create c.Output.Name c.Output.Type)
+    let schemaOf (cols: Col list) : Schema = cols |> List.map _.Output.Field
 
     let private members (cols: Col list) = cols |> List.map _.Output.Name
 
@@ -74,8 +73,7 @@ module internal Lowering =
                 c.Physical,
                 { Output =
                     { Alias = mint (next + i)
-                      Name = c.Name
-                      Type = c.Type }
+                      Field = c.Field }
                   Origin = Some(table.Id, node.Id) })
 
         Relation.Scan(spec.Physical, columns |> List.map (fun (p, c) -> p, c.Output)),
@@ -320,9 +318,8 @@ module internal Lowering =
 
                             c.Output.Alias,
                             { Output =
-                                { c.Output with
-                                    Alias = mint (b.Next + i)
-                                    Name = out }
+                                { Alias = mint (b.Next + i)
+                                  Field = ColumnSpec.renameField out c.Output.Field }
                               Origin = c.Origin })
 
                     Ok
@@ -419,7 +416,10 @@ module internal Lowering =
                                                 { c with
                                                     Output =
                                                         { c.Output with
-                                                            Name = c.Output.Name + "_right" } }
+                                                            Field =
+                                                                ColumnSpec.renameField
+                                                                    (c.Output.Name + "_right")
+                                                                    c.Output.Field } }
                                             else
                                                 c)
 
@@ -553,10 +553,14 @@ module internal Lowering =
 
                     a.Fn,
                     source.Output.Alias,
+                    let field = Field.create a.Name (DataFrame.aggregateType a.Fn source.Output.Type)
+
                     { Output =
                         { Alias = mint (b.Next + i)
-                          Name = a.Name
-                          Type = DataFrame.aggregateType a.Fn source.Output.Type }
+                          Field =
+                            match DataFrame.aggregateUnit a.Fn source.Output.Field.Unit with
+                            | Some u -> Field.withUnit u field
+                            | None -> field }
                       Origin = None })
 
             Ok

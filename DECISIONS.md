@@ -107,6 +107,22 @@ Two things stay as they were. A reported timestamp reads as seconds whatever its
 entry decided. A timestamp cell still travels as seconds text through `parameterValue` and `decodeCell`.
 *Reopen if* a cell carries a sub-second value; the value path then follows the unit as the DDL now does.
 
+**Amended 2026-10-24: units reach the model rules and the provider's result.** Two places D12.5 left
+unit-blind now see units.
+
+- A declared join whose key columns state different units is a model defect, `DB-JOIN-KEY-UNIT`, beside
+  `DB-JOIN-KEY-TYPE`, on D12.5's rule: two stated units must be one unit, and a side stating none matches
+  anything. Such a model was refused by every pipeline check that used the join; it is now refused once,
+  where the author declared it.
+- A statement's output column carries its field (`Output.Field`), so `Statement.schema`, and the table
+  `Statement.toTable` reads a result into, state each column's unit. A scanned column carries the model's
+  field, a projected or a join's renamed one keeps its unit under the new name, and an aggregate states
+  the unit compute's `aggregateUnit` gives it (a sum, mean, minimum or maximum its operand's; a count
+  none). The local suffix then runs the evaluator's unit check over a pushed-down result, as it does over
+  the model's rows, so the two engines check units alike. Admission still refuses a mixed-unit pipeline
+  first; this is the second check, not a replacement. The connection record still writes a statement's
+  columns as name and type, so a replayed result states no unit; the wire is unchanged.
+
 ## 2026-10-12 — D11: PostgreSQL, the second dialect (Phase 1906)
 
 `Fuaran.DB.Dialect.PostgreSql` is the second dialect. Its purpose is to find what the first left in the

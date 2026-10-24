@@ -66,17 +66,22 @@ type Scalar =
     /// Three-valued membership in a non-empty list.
     | InList of Scalar * Scalar list
 
-/// One column a relation produces: the alias the statement knows it by, the name the pipeline
-/// knows it by, and its type. `Name` is never rendered.
+/// One column a relation produces: the alias the statement knows it by, and its field: the name the
+/// pipeline knows it by, its type, and the unit, label and description it carries (DECISIONS.md D12).
+/// `Name` is never rendered.
 type Output =
     {
         /// The minted alias, unique within the statement.
         Alias: string
-        /// The pipeline's name for the column — a model name, or a name a step gave it.
-        Name: string
-        /// The column's type, as the reference evaluator types it at that step.
-        Type: ColumnType
+        /// The column's field. Its name is the pipeline's (a model name, or a name a step gave it), its
+        /// type the reference evaluator's at that step, and its unit the model's or the step's.
+        Field: Field
     }
+
+    /// The pipeline's name for the column.
+    member o.Name = o.Field.Name
+    /// The column's type, as the reference evaluator types it at that step.
+    member o.Type = o.Field.Type
 
 /// Where a column of a join's output comes from.
 [<RequireQualifiedAccess>]
@@ -239,9 +244,9 @@ module Relation =
 [<RequireQualifiedAccess>]
 module Statement =
 
-    /// The result schema in the pipeline's names — what the local suffix reads.
-    let schema (s: Statement) : Schema =
-        s.Columns |> List.map (fun o -> Field.create o.Name o.Type)
+    /// The result schema in the pipeline's names, each column's unit and metadata included: what the
+    /// local suffix reads, so the evaluator re-checks a pushed-down result's units.
+    let schema (s: Statement) : Schema = s.Columns |> List.map _.Field
 
     /// The statement's rows as a table in the pipeline's names, read POSITIONALLY: the i-th cell of
     /// every row is the i-th column. A row of another width, or a cell its column's type does not

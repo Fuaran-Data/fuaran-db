@@ -20,6 +20,11 @@ module ModelRules =
     [<Literal>]
     let JoinKeyType = "DB-JOIN-KEY-TYPE"
 
+    /// A join's key pair relates columns that state different units (DECISIONS.md D12.5's rule: two
+    /// stated units must be one unit; a side stating none matches anything).
+    [<Literal>]
+    let JoinKeyUnit = "DB-JOIN-KEY-UNIT"
+
     /// A join declares no key pair.
     [<Literal>]
     let JoinNoKeys = "DB-JOIN-NO-KEYS"
@@ -80,6 +85,7 @@ module ModelRules =
         [ JoinDangling
           JoinKeyForeign
           JoinKeyType
+          JoinKeyUnit
           JoinNoKeys
           MeasureDangling
           MeasureType
@@ -186,7 +192,21 @@ module ModelRules =
                                   (ColumnType.tag rc.Type))
                               n.Id
                               [ l; r ] ]
-                    | Ok _, Ok _ -> []
+                    | Ok lc, Ok rc ->
+                        match lc.Field.Unit, rc.Field.Unit with
+                        | Some lu, Some ru when Unit.render lu <> Unit.render ru ->
+                            [ defect
+                                  JoinKeyUnit
+                                  (sprintf
+                                      "join '%s' relates '%s' (%s) to '%s' (%s)"
+                                      j.Name
+                                      lc.Name
+                                      (Unit.render lu)
+                                      rc.Name
+                                      (Unit.render ru))
+                                  n.Id
+                                  [ l; r ] ]
+                        | _ -> []
                     | a, b ->
                         [ a; b ]
                         |> List.choose (fun x ->

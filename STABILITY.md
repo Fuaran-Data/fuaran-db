@@ -260,3 +260,9 @@ Riding the draft (2026-10-24), on the same terms: the pins move to Core 0.40.3 a
   and `(6)`, `timestamp(3)` and `(6)` for milliseconds and microseconds, where every timestamp was
   seconds; a nanosecond timestamp is refused as a column and as a parameter. A seconds timestamp's DDL is
   unchanged.
+- **Breaking — `Output` is `{ Alias; Field }`** (D12, the third amendment). A full-literal construction
+  stops compiling; `o.Name` and `o.Type` still read, through the field. `Statement.schema` and
+  `Statement.toTable` now state each column's unit, so the local suffix re-checks a pushed-down result's
+  units.
+- **The posture, tightened — `DB-JOIN-KEY-UNIT`**: a declared join whose key columns state different units
+  is a model defect. A model that states no unit, or one unit on both sides of each key, is unaffected.
