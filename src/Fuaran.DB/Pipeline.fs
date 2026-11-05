@@ -179,6 +179,16 @@ module PipelineCheck =
                 else
                     List.zip left right
                     |> List.tryPick (fun (l, r) -> unitsMeet step ("set column '" + l.Name + "'") l.Unit r.Unit)
+        // A fit's and a prediction's terms and offset are unit-checked as a derive's expression is,
+        // under the evaluator's own labels; a prediction's are evaluated over the rows reaching it.
+        | Fit spec ->
+            (spec.Predictors |> List.map (fun (n, e) -> "fit term '" + n + "'", e))
+            @ (spec.Offset |> Option.map (fun e -> "fit offset", e) |> Option.toList)
+            |> List.tryPick (fun (what, e) -> resolve what e)
+        | Predict spec ->
+            (spec.Fit.Predictors |> List.map (fun (n, e) -> "predict term '" + n + "'", e))
+            @ (spec.Fit.Offset |> Option.map (fun e -> "predict offset", e) |> Option.toList)
+            |> List.tryPick (fun (what, e) -> resolve what e)
         | Project _
         | GroupBy _
         | Window _
@@ -186,7 +196,8 @@ module PipelineCheck =
         | Unpivot _
         | Sort _
         | Distinct
-        | Limit _ -> None
+        | Limit _
+        | Define _ -> None
 
     /// The modelled table an operand names, or why it is refused.
     let private operandTable
@@ -247,6 +258,16 @@ module PipelineCheck =
                                         pairs |> List.map (fun (a, b) -> a + " = " + b) |> String.concat ", ")
 
                                 Error(PipelineRefusal.UnrelatedJoin(step, rightSpec.Name, on, described))
+                    // A prediction's model source must carry every column the prediction reads from it.
+                    | Predict spec, Some(modelNode, _) ->
+                        let modelMembers = Model.schemaOf modelNode |> List.map _.Name
+
+                        match
+                            Reads.ofPredictModel spec
+                            |> List.tryFind (fun c -> not (List.contains c modelMembers))
+                        with
+                        | Some c -> Error(PipelineRefusal.UnknownColumn(step, c, modelMembers))
+                        | None -> Ok()
                     | _ -> Ok()
 
                 joinCheck

@@ -224,6 +224,8 @@ module PostgreSql =
         | Construct.Rounding _ ->
             Some "decimal scale on division: PostgreSQL scales and rounds a numeric result by its own rule"
         | Construct.EmptyList -> Some "PostgreSQL cannot spell IN ()"
+        // Outside the declared subset; the lowering excludes it before a dialect is asked.
+        | Construct.Interpolation -> Some "an interpolation is evaluated locally"
 
     /// A function or an operator over rendered arguments; only what `refuses` admits is reached.
     let private render (c: Construct) (args: string list) : string =
@@ -292,7 +294,8 @@ module PostgreSql =
         | Construct.Parameter _
         | Construct.Cast _
         | Construct.Rounding _
-        | Construct.EmptyList -> one args
+        | Construct.EmptyList
+        | Construct.Interpolation -> one args
 
     /// An aggregate over a rendered column of this type.
     let private aggregate (fn: AggFn) (ty: ColumnType) (arg: string) : string =

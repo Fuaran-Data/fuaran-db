@@ -539,6 +539,39 @@ let tests =
                       (PolicyRefusal.NoGrants "nobody")
                       (sprintf "%s is refused" label)
 
+          testCase "a fit is no aggregate: every column it reads is used row by row, and a coefficient carries them"
+          <| fun _ ->
+              let fit (output: FitOutput) =
+                  Fit
+                      { FitSpec.ols "salary" [ "staff_id", Col "staff_id" ] with
+                          GroupBy = [ "dept" ]
+                          Output = output }
+
+              Expect.equal
+                  (refused analyst [ fit FitOutput.Summary; page 5 ])
+                  (PolicyRefusal.AggregateOnly(PolicySite.Step 1, staffCol "salary" "personal", "a model fit's input"))
+                  "an aggregate-only response is not fitted"
+
+              Expect.equal
+                  (refused outsider [ fit FitOutput.Coefficients; page 5 ])
+                  (PolicyRefusal.ColumnNotGranted(PolicySite.Step 1, staffCol "salary" "personal", [ "public" ]))
+                  "an ungranted response is not fitted"
+
+              admitted hr [ fit FitOutput.Coefficients; page 5 ] |> ignore
+
+          testCase "a prediction reads its model's table: a policed one is refused, an unmodelled column is refused"
+          <| fun _ ->
+              let predict (source: string) (term: string) =
+                  Predict(PredictSpec.ofTraining (FitSpec.ols "budget" [ term, Col term ]) (Ref source))
+
+              match refused hr [ predict "depts" "dept"; page 5 ] with
+              | PolicyRefusal.PolicyUnwrappable(1, "depts", _, _) -> ()
+              | other -> failtestf "a policed model table is refused as %A" other
+
+              match refused hr [ predict "projects" "dept"; page 5 ] with
+              | PolicyRefusal.Pipeline(PipelineRefusal.UnknownColumn(1, "budget", _)) -> ()
+              | other -> failtestf "a model column the table lacks is refused as %A" other
+
           testCase
               "a column read only inside a predicate is checked, and the refusal names column, classification and grants"
           <| fun _ ->

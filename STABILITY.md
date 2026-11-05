@@ -284,3 +284,18 @@ Riding the draft (2026-10-24), on the same terms: the pins move to Core 0.40.3 a
   still reads (`session/legacy/`). The new vectors are `session/streams/measured.jsonl` and
   `session/measured/ran.json`. A decoder older than this draft refuses a result column that states any of
   them, by name.
+
+Riding the draft (2026-11-05), on the same terms: the Compute pin moves to 0.43.0 (DECISIONS.md D13).
+
+- **Breaking — the pin moves to `Fuaran.Compute.DataFrame` 0.43.0.** Compute's `Transform` gains `Define`,
+  `Fit` and `Predict`, its `ColExpr` gains `Arg`, `Call` and `Interpolate`, and its `EvalError` gains six
+  cases, so an exhaustive match over any of them breaks.
+- **Breaking — `Construct` gains `Interpolation`**, outside the declared subset; both dialects refuse it
+  by name. A closed union gaining a case breaks every exhaustive match.
+- **Additive — the conformance set**: `reach-interpolation` takes the set to 69. Every existing fixture file
+  keeps its bytes.
+- **Additive — `Reads.ofPredictModel`**: the columns a prediction reads from its model's source.
+- **The posture, widened and decided (D13)**: the pipeline check and `Policy.admit` admit the new verbs
+  and expressions under the rules D13 records — a fit's and a prediction's reads used row by row, a
+  prediction's model table checked, policed tables refused as a model, a prediction counted as a join.
+  Nothing new lowers.

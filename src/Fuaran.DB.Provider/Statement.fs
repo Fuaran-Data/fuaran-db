@@ -42,6 +42,8 @@ type Construct =
     | Rounding of RoundingMode
     /// A membership test against an empty list, which SQL cannot spell. Outside the declared subset.
     | EmptyList
+    /// A read through a curve given as knots (`Interpolate`). Outside the declared subset.
+    | Interpolation
 
 /// A scalar expression of the statement, over the columns of the relation it is evaluated in.
 /// There is no literal case: every value is a parameter.

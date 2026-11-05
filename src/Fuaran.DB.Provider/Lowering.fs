@@ -96,9 +96,12 @@ module internal Lowering =
         | Cast(_, x)
         | Convert(x, _)
         | Rounded(x, _)
-        | InParam(x, _) -> [ x ]
+        | InParam(x, _)
+        | Interpolate(x, _, _, _) -> [ x ]
+        | Arg _ -> []
         | Coalesce xs
-        | ApplyFn(_, xs) -> xs
+        | ApplyFn(_, xs)
+        | Call(_, xs) -> xs
         | Case(cases, els) -> (cases |> List.collect (fun (w, t) -> [ w; t ])) @ [ els ]
         | InList(x, items) -> x :: items
 
@@ -119,6 +122,11 @@ module internal Lowering =
         | Quotient(_, _, r)
         | Rounded(_, r) -> Some(Construct.Rounding r.Mode)
         | InList(_, []) -> Some Construct.EmptyList
+        | Interpolate _ -> Some Construct.Interpolation
+        // The planner expands every call before lowering (Compute D48); one left unexpanded is a
+        // pipeline whose definitions the reference refuses, and the totality verdict keeps it local.
+        | Call _
+        | Arg _
         | ApplyFn _
         | Col _
         | Lit _
@@ -148,6 +156,9 @@ module internal Lowering =
         | Rounded _
         | Quotient _
         | InParam _
+        | Interpolate _
+        | Call _
+        | Arg _
         | Coalesce _
         | Case _
         | InList _ -> None
@@ -226,6 +237,9 @@ module internal Lowering =
         | Convert _ -> Error(Refusal.ConstructExcluded(step, Construct.Cast FloatType))
         | Quotient(_, _, r)
         | Rounded(_, r) -> Error(Refusal.ConstructExcluded(step, Construct.Rounding r.Mode))
+        | Interpolate _ -> Error(Refusal.ConstructExcluded(step, Construct.Interpolation))
+        | Call(name, _) -> Error(Refusal.MayRefuse(step, "the call of '" + name + "' reached the lowering unexpanded"))
+        | Arg name -> Error(Refusal.MayRefuse(step, "the parameter '" + name + "' is read outside a function body"))
 
     /// The parameter binder over a statement under construction.
     let private binder (d: Dialect) (step: int) (b: Built) =
@@ -663,5 +677,10 @@ module internal Lowering =
                 | Union _ -> b, lowered, Some(Refusal.VerbNotLowered(step, "union"))
                 | Intersect _ -> b, lowered, Some(Refusal.VerbNotLowered(step, "intersect"))
                 | Except _ -> b, lowered, Some(Refusal.VerbNotLowered(step, "except"))
+                // The planner drops every definition when it expands the pipeline; one that remains
+                // belongs to a pipeline whose definitions the reference refuses.
+                | Define _ -> b, lowered, Some(Refusal.VerbNotLowered(step, "define"))
+                | Fit _ -> b, lowered, Some(Refusal.VerbNotLowered(step, "fit"))
+                | Predict _ -> b, lowered, Some(Refusal.VerbNotLowered(step, "predict"))
 
         go 1 start planned

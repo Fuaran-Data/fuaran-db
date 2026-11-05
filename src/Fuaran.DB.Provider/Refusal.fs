@@ -144,6 +144,7 @@ module Refusal =
         | Construct.Cast ty -> sprintf "a cast to %s" (ColumnType.tag ty)
         | Construct.Rounding mode -> sprintf "an exact rounding (%A)" mode
         | Construct.EmptyList -> "a membership test against an empty list"
+        | Construct.Interpolation -> "an interpolation through a curve's knots"
 
     /// The refusal as one sentence, naming the rule that placed it.
     let describe (r: Refusal) : string =

@@ -47,7 +47,8 @@ let constructs: Construct list =
     @ (unionCases<AggFn> () |> List.map Construct.Aggregate)
     @ [ Construct.Cast StringType
         Construct.Rounding RoundingMode.HalfEven
-        Construct.EmptyList ]
+        Construct.EmptyList
+        Construct.Interpolation ]
 
 /// Where the boundary falls for a fixture through a dialect.
 let boundaryOf (dialect: Dialect) (f: Fixture) : Refusal option =

@@ -30,7 +30,7 @@
     <PackageReference Update="FSharp.Core" Version="10.1.300" />
     <PackageReference Include="Fuaran.Core.OpStream" Version="0.40.3" />
     <PackageReference Include="Fuaran.Core.Conformance" Version="0.40.3" />
-    <PackageReference Include="Fuaran.Compute.DataFrame" Version="0.41.0" />
+    <PackageReference Include="Fuaran.Compute.DataFrame" Version="0.43.0" />
   </ItemGroup>
 
   <ItemGroup>

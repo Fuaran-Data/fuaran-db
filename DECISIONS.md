@@ -1,5 +1,37 @@
 # Fuaran.DB — decisions (newest first)
 
+## 2026-11-05 — D13: the posture over Compute 0.43.0's new verbs and expressions
+
+Compute 0.43.0 adds three verbs (`Define`, `Fit`, `Predict`) and three expressions (`Arg`, `Call`,
+`Interpolate`). Nothing refused them before, because nothing could write them; admitting them is a change
+to the posture, so it is decided here. Decided under the operator's standing direction to take the
+long-term-best option on a pin raise, and open to the operator's review.
+
+1. **A definition and a call read what their arguments read.** A function body reads no column (Compute
+   D48), so `Reads.ofExpr` of a call is its arguments' reads, an `Arg` reads nothing and a `Define` step
+   reads and changes nothing. An interpolation reads its operand; its knots are data.
+2. **A fit is not an aggregate the group floor governs.** Its fitted and residual values are per row, and
+   a coefficient over a small group can pin a row's value. Every column a fit reads — its response, keys,
+   weights and every column a term or the offset reads — is therefore used row by row ("a model fit's
+   input"), so an aggregate-only grant never admits one, and every output column carries the lineage of
+   everything the fit read.
+3. **A prediction reads its model's table as a second source.** `Reads.operandOf` names it, the pipeline
+   check requires it to be modelled and to carry every column the prediction reads from it
+   (`Reads.ofPredictModel`), each of those is used row by row ("a prediction's model"), a table with a row
+   policy is refused as its model (`PolicyUnwrappable`: no filter after the step can remove its rows), and
+   it counts against the join cap — it pairs each row with its group's model by key.
+4. **Cost.** A `Coefficients` fit can return more rows than it reads, so it may not follow the bounding
+   `Limit`; a fit's and a prediction's keys count against the grouping-key cap.
+5. **Nothing new lowers.** The planner expands definitions before lowering; `Fit`, `Predict` and a left
+   `Define` stop the prefix (`VerbNotLowered`), `Interpolate` is outside the declared subset
+   (`Construct.Interpolation`), and an unexpanded call or argument is the reference's to refuse
+   (`MayRefuse`).
+6. **The record.** A definition's body and literal defaults, and a fit's or a prediction's terms and offset,
+   are redacted as a derive's expression is, and an embedded model source is withheld. A curve's knots and
+   a fit's control slots stay, as a `Limit`'s count does: neither is ever bound for a source.
+
+*Reopen* when a phase designs a fit over aggregate-only columns under a floor, or lowers any of these.
+
 ## 2026-10-21 — D12: a modelled column is a Core field (Phase 2)
 
 A column of the dataset model was a record of its own: a name, a physical identifier, a type and a

@@ -466,6 +466,73 @@ module Policy =
                 (idVars |> List.map (fun k -> k, linOf flow k))
                 @ [ "variable", noLin; "value", linOfAll flow valueVars ]
               Rest = None }
+        // A definition changes no frame.
+        | Define _ -> flow
+        // A fit's every statistic is computed from every column it reads, and a categorical term's
+        // `term` names carry its levels, which are row values: each output column carries the lineage of
+        // everything the fit read. Its tables are closed, so the column names are the evaluator's own.
+        | Fit spec ->
+            let read = linOfAll flow (Reads.ofStep step |> Result.defaultValue [])
+            let keys = spec.GroupBy |> List.map (fun k -> k, linOf flow k)
+            let stats (names: string list) = names |> List.map (fun n -> n, read)
+
+            match spec.Output with
+            | FitOutput.Coefficients ->
+                { Cols = keys @ stats [ "term"; "estimate"; "std_error"; "t" ] @ [ "unit", noLin ]
+                  Rest = None }
+            | FitOutput.Summary ->
+                let theta =
+                    match spec.Family with
+                    | FitFamily.NegativeBinomial _ -> [ "theta"; "theta_std_error"; "alternations" ]
+                    | _ -> []
+
+                { Cols =
+                    keys
+                    @ stats (
+                        [ "n"
+                          "df"
+                          "sigma"
+                          "r2"
+                          "rank"
+                          "deviance"
+                          "null_deviance"
+                          "dispersion"
+                          "iterations"
+                          "converged" ]
+                        @ theta
+                    )
+                  Rest = None }
+            | FitOutput.Fitted ->
+                { flow with
+                    Cols = upsert "fitted" read flow.Cols }
+            | FitOutput.Residuals ->
+                { flow with
+                    Cols = upsert "residual" read flow.Cols }
+        // A prediction appends columns computed from the row's keys and terms AND from every column of
+        // the model's source it reads.
+        | Predict spec ->
+            let other =
+                match spec.Model with
+                | PredictModel.Training source
+                | PredictModel.Coefficients source -> operandFlow mark model source
+
+            let read =
+                join
+                    (linOfAll flow (Reads.ofStep step |> Result.defaultValue []))
+                    (linOfAll other (Reads.ofPredictModel spec))
+
+            let appended =
+                match spec.Model with
+                | PredictModel.Coefficients _ -> [ "predicted" ]
+                | PredictModel.Training _ ->
+                    [ "predicted"; "se_fit"; "se_pred" ]
+                    @ (if Option.isSome spec.Interval then
+                           [ "lower"; "upper" ]
+                       else
+                           [])
+
+            { flow with
+                Cols = appended |> List.fold (fun cols n -> upsert n read cols) flow.Cols }
 
     // ---- how a step uses what it reads ----
 
@@ -522,6 +589,22 @@ module Policy =
         | Except source ->
             (everything flow @ everything (operandFlow mark model source))
             |> List.map (fun l -> l, Expose "part of a row compared whole")
+        | Define _ -> []
+        // A fit is not an aggregate the group floor governs: its fitted and residual values are per
+        // row, and a coefficient over a small group can pin a row's value. Every column it reads is
+        // used row by row.
+        | Fit _ -> names (Expose "a model fit's input") (Reads.ofStep step |> Result.defaultValue [])
+        | Predict spec ->
+            let source =
+                match spec.Model with
+                | PredictModel.Training s
+                | PredictModel.Coefficients s -> s
+
+            let other = operandFlow mark model source
+
+            names (Expose "a prediction's input") (Reads.ofStep step |> Result.defaultValue [])
+            @ (Reads.ofPredictModel spec
+               |> List.map (fun c -> linOf other c, Expose "a prediction's model"))
 
     /// How far `grants` reach a classification: row by row when any grant over it says so, in aggregate
     /// when one does and none says more, and not at all when none names it.
@@ -623,7 +706,10 @@ module Policy =
                                 | Limit _
                                 | Union _
                                 | Intersect _
-                                | Except _ -> floors
+                                | Except _
+                                | Define _
+                                | Fit _
+                                | Predict _ -> floors
 
                             advance mark model flow step, admitted, floors)))
                 (Ok(start, [], Map.empty))
@@ -671,6 +757,13 @@ module Policy =
             | Anti -> false
         | Union _
         | Unpivot _ -> true
+        // A coefficient table holds a row per group and term, which can outnumber the rows read.
+        | Fit spec ->
+            match spec.Output with
+            | FitOutput.Coefficients -> true
+            | FitOutput.Summary
+            | FitOutput.Fitted
+            | FitOutput.Residuals -> false
         | Filter _
         | Project _
         | Derive _
@@ -681,7 +774,9 @@ module Policy =
         | Distinct
         | Limit _
         | Intersect _
-        | Except _ -> false
+        | Except _
+        | Define _
+        | Predict _ -> false
 
     /// The bounding `Limit`: the last one, with only non-growing steps after it, and its 1-based step.
     let private bounding (pipeline: Transform list) : (int * Slot<int>) option =
@@ -697,6 +792,9 @@ module Policy =
         match step with
         | GroupBy(keys, _) -> List.length keys
         | Pivot spec -> List.length spec.Index
+        // A fit, and a prediction from its training rows, group by the spec's keys.
+        | Fit spec -> List.length spec.GroupBy
+        | Predict spec -> List.length spec.Fit.GroupBy
         | Filter _
         | Project _
         | Derive _
@@ -708,11 +806,15 @@ module Policy =
         | Limit _
         | Union _
         | Intersect _
-        | Except _ -> 0
+        | Except _
+        | Define _ -> 0
 
     let private isJoin (step: Transform) : bool =
         match step with
         | Join _ -> true
+        // A prediction pairs each row with its group's model, read from another table by key: a join
+        // in all but name, and held to the same cap.
+        | Predict _ -> true
         | Filter _
         | Project _
         | Derive _
@@ -725,7 +827,9 @@ module Policy =
         | Limit _
         | Union _
         | Intersect _
-        | Except _ -> false
+        | Except _
+        | Define _
+        | Fit _ -> false
 
     let private cost
         (model: ModelNode)
@@ -802,6 +906,9 @@ module Policy =
         | Case(cases, els) -> Case(cases |> List.map (fun (w, t) -> go w, go t), go els)
         | InList(x, items) -> InList(go x, List.map go items)
         | Quotient(a, b, r) -> Quotient(go a, go b, r)
+        | Interpolate(x, knots, kind, outside) -> Interpolate(go x, knots, kind, outside)
+        | Call(name, args) -> Call(name, List.map go args)
+        | Arg _ -> e
 
     let private policiesOf (node: ModelNode) : RowPolicySpec list =
         node.Children
@@ -894,6 +1001,8 @@ module Policy =
                         | Intersect _
                         | Except _ ->
                             refuse "a set operation compares or adds the table's rows whole, before any filter"
+                        | Predict _ ->
+                            refuse "a prediction reads the table's rows whole as its model, before any filter"
                         | Filter _
                         | Project _
                         | Derive _
@@ -903,7 +1012,9 @@ module Policy =
                         | Unpivot _
                         | Sort _
                         | Distinct
-                        | Limit _ -> Ok [])
+                        | Limit _
+                        | Define _
+                        | Fit _ -> Ok [])
 
     // ---- the group floor ----
 

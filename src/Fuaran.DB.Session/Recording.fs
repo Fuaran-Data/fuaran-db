@@ -13,27 +13,6 @@ open Fuaran.DB
 [<RequireQualifiedAccess>]
 module Recording =
 
-    let rec private columnsOf (e: ColExpr) : string list =
-        match e with
-        | Col c -> [ c ]
-        | Lit _
-        | Param _
-        | Now _ -> []
-        | Binary(_, a, b)
-        | Quotient(a, b, _) -> columnsOf a @ columnsOf b
-        | Not x
-        | IsNull x
-        | Cast(_, x)
-        | Convert(x, _)
-        | Rounded(x, _)
-        | InParam(x, _) -> columnsOf x
-        | Coalesce xs
-        | ApplyFn(_, xs) -> List.collect columnsOf xs
-        | Case(cases, els) ->
-            (cases |> List.collect (fun (w, t) -> columnsOf w @ columnsOf t))
-            @ columnsOf els
-        | InList(x, items) -> columnsOf x @ List.collect columnsOf items
-
     /// The classifications a request reads, sorted and distinct: from the columns the policy granted
     /// and the columns every applied row policy names.
     let reads (model: ModelNode) (applied: PolicyRule list) : string list =
@@ -45,7 +24,7 @@ module Recording =
                 match Model.tryTable table model with
                 | None -> []
                 | Some(node, _) ->
-                    let named = columnsOf predicate
+                    let named = Reads.ofExpr predicate
 
                     Model.columns node
                     |> List.filter (fun (_, c) -> List.contains c.Name named)
@@ -80,6 +59,11 @@ module Recording =
         | Case(cases, els) -> Case(cases |> List.map (fun (w, t) -> go w, go t), go els)
         | InList(x, items) -> InList(go x, List.map go items)
         | Quotient(a, b, r) -> Quotient(go a, go b, r)
+        // A curve's knots stay: they are the curve's constants, never a value bound for a source (an
+        // interpolation is evaluated locally, never lowered), as a `Limit`'s count stays.
+        | Interpolate(x, knots, kind, outside) -> Interpolate(go x, knots, kind, outside)
+        | Call(name, args) -> Call(name, List.map go args)
+        | Arg _ -> e
 
     let private redactSource (count: int ref) (s: DataSource) : DataSource =
         match s with
@@ -96,6 +80,35 @@ module Recording =
         | Union s -> Union(redactSource count s)
         | Intersect s -> Intersect(redactSource count s)
         | Except s -> Except(redactSource count s)
+        // A definition's body and its literal defaults are redacted: expansion inlines both into the
+        // expressions that use them, where they can be bound for a source.
+        | Define fd ->
+            Define
+                { fd with
+                    Params =
+                        fd.Params
+                        |> List.map (fun p ->
+                            match p.Default with
+                            | Some(Slot.Lit _) ->
+                                count.Value <- count.Value + 1
+
+                                { p with
+                                    Default = Some(Slot.Param(withheldSlot count.Value)) }
+                            | Some(Slot.Param _)
+                            | None -> p)
+                    Body = redactExpr count fd.Body }
+        // A fit's and a prediction's terms and offset are redacted like a derive's expression; their
+        // control slots stay, as a `Limit`'s do. A prediction's embedded model source is withheld.
+        | Fit spec -> Fit(FitSpec.mapExprs (redactExpr count) spec)
+        | Predict spec ->
+            let spec = PredictSpec.mapExprs (redactExpr count) spec
+
+            Predict
+                { spec with
+                    Model =
+                        match spec.Model with
+                        | PredictModel.Training s -> PredictModel.Training(redactSource count s)
+                        | PredictModel.Coefficients s -> PredictModel.Coefficients(redactSource count s) }
         | Project _
         | GroupBy _
         | Window _

@@ -577,7 +577,14 @@ module Fixtures =
           ag First "reach-first" "price"
           ag Last "reach-last" "price"
           reaching (Construct.Cast StringType) "reach-cast" "orders" (filter (IsNull(Cast(StringType, Col "qty"))))
-          reaching Construct.EmptyList "reach-empty-list" "orders" (filter (InList(Col "qty", []))) ]
+          reaching Construct.EmptyList "reach-empty-list" "orders" (filter (InList(Col "qty", [])))
+          reaching
+              Construct.Interpolation
+              "reach-interpolation"
+              "orders"
+              (filter (
+                  IsNull(Interpolate(Col "price", [ 0.0, 0.0; 10.0, 1.0 ], InterpKind.Linear, InterpOutside.Clamp))
+              )) ]
 
     /// Every fixture of the kit.
     let all: Fixture list = subset @ differences @ refusals
