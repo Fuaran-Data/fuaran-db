@@ -11,5 +11,15 @@
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/Fuaran-Data/fuaran-db</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
+    <PackageProjectUrl>https://github.com/Fuaran-Data/fuaran-db</PackageProjectUrl>
+  </PropertyGroup>
+  <PropertyGroup>
+    <!-- One version property per producing repository (DECISIONS D14). Each names a version that is
+         tagged and served by nuget.org, never a <Version> read from a clone: this repository restores
+         from the public feed alone, and so does every consumer of its packages. The pair is the line its
+         first consumers build on, so a module consuming them and this repository restores one Core and
+         one Compute. -->
+    <FuaranCoreVersion>0.40.2</FuaranCoreVersion>
+    <FuaranComputeVersion>0.43.0</FuaranComputeVersion>
   </PropertyGroup>
 </Project>

@@ -28,9 +28,9 @@
   <ItemGroup>
     <!-- Released versions, resolvable from the public feed alone (DECISIONS.md D3). -->
     <PackageReference Update="FSharp.Core" Version="10.1.300" />
-    <PackageReference Include="Fuaran.Core.OpStream" Version="0.42.0" />
-    <PackageReference Include="Fuaran.Core.Conformance" Version="0.42.0" />
-    <PackageReference Include="Fuaran.Compute.DataFrame" Version="0.44.0" />
+    <PackageReference Include="Fuaran.Core.OpStream" Version="$(FuaranCoreVersion)" />
+    <PackageReference Include="Fuaran.Core.Conformance" Version="$(FuaranCoreVersion)" />
+    <PackageReference Include="Fuaran.Compute.DataFrame" Version="$(FuaranComputeVersion)" />
   </ItemGroup>
 
   <ItemGroup>
