@@ -22,7 +22,14 @@ No package here opens a connection: the host supplies the executor.
 
 ## Status
 
-Pre-release. `Fuaran.DB` holds the dataset model: its node kinds and op vocabulary, the model rules, the
+Pre-release, and **not yet published**: no package of this repository is on nuget.org, and nothing is
+tagged. The first release is 0.1.0, of six packages (`Fuaran.DB`, `Fuaran.DB.Provider`,
+`Fuaran.DB.Dialect.SqlServer`, `Fuaran.DB.Dialect.PostgreSql`, `Fuaran.DB.Conformance` and
+`Fuaran.DB.Session`), pushed to nuget.org from a `v0.1.0` tag by
+[`publish.yml`](.github/workflows/publish.yml). Until then, build from source: every dependency already
+restores from nuget.org, at `Fuaran.Core.*` 0.40.2 and `Fuaran.Compute.DataFrame` 0.43.0.
+
+`Fuaran.DB` holds the dataset model: its node kinds and op vocabulary, the model rules, the
 check of a pipeline against a model, seeding and drift against a reported schema, a canonical wire codec with
 its conformance corpus in [`wire-fixtures/`](wire-fixtures/), and an AI-tools surface. It also holds the
 policy: for a subject the host supplies, column grants, row policies, cost limits and a minimum group size
@@ -60,6 +67,7 @@ Requires the .NET SDK pinned in [`global.json`](global.json).
 ```powershell
 ./run.ps1      # restore tools, format, build, test
 ./verify.ps1   # the gate
+./gates/check-publication-boundary.ps1 -History   # the publication sweep, every commit included
 ```
 
 The suite runs the conformance kit against a real SQL Server only when `FUARAN_DB_SQLSERVER` holds a

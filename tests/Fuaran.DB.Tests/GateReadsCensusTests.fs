@@ -12,9 +12,10 @@ module Fuaran.DB.Tests.GateReadsCensusTests
 // here in two halves.
 //
 // 1. THE GATE. `verify.ps1` passes through to `run.ps1`, which formats, builds the solution and runs
-//    this suite — no other script, and no sweep of the tracked set. The test below pins that shape,
-//    so a stage added to the gate (which would read files no census of this suite can see) turns it
-//    red until the record is re-examined.
+//    this suite, and runs one other script: the publication-boundary sweep, which reads every tracked
+//    file, so the record must then read `**` (DECISIONS D14). The test below pins that shape, so a
+//    stage added to the gate (which would read files no census of this suite can see) turns it red
+//    until the record is re-examined.
 //
 // 2. THE SUITE. The record lists what this suite opens, checked by a STATIC census of the suite's own
 //    sources: a test file reaches the real repository only through a root locator (`fixturesDir`,
@@ -213,6 +214,10 @@ let private testSources () : (string * string) list =
 let private candidates () =
     files.Value |> List.filter (fun f -> not (matchesAny implied f))
 
+/// The publication-boundary sweep (DECISIONS D14): the one script besides `run.ps1` the gate may run.
+/// It reads every tracked file.
+let private boundaryScript = "check-publication-boundary.ps1"
+
 /// A script the gate entry points invoke, by its `.ps1` file name.
 let private invokedScripts (text: string) : string list =
     [ for m in Regex.Matches(text, @"[\w./-]+\.ps1") -> Path.GetFileName m.Value ]
@@ -230,7 +235,8 @@ let tests =
                   Expect.isTrue (p <> "" && why <> "") (sprintf "a waiver needs a path and a reason: %A" (p, why))
           }
 
-          test "THE GATE — verify.ps1 and run.ps1 run no other script and no sweep of the tracked set" {
+          test
+              "THE GATE — verify.ps1 and run.ps1 run only the boundary sweep, and a sweep of the tracked set reads `**`" {
               let text name =
                   File.ReadAllText(Path.Combine(repoRoot.Value, name))
 
@@ -238,15 +244,20 @@ let tests =
 
               let others =
                   invokedScripts gate
-                  |> List.filter (fun s -> s <> "verify.ps1" && s <> "run.ps1")
+                  |> List.filter (fun s -> s <> "verify.ps1" && s <> "run.ps1" && s <> boundaryScript)
 
               Expect.isEmpty
                   others
                   "the gate runs a script this census does not read: record what it opens, then extend this test"
 
-              Expect.isFalse
-                  (gate.Contains "ls-files")
-                  "the gate sweeps the tracked set: every tracked file is then a gate input, and the record must read `**`"
+              let sweeps =
+                  gate.Contains "ls-files" || List.contains boundaryScript (invokedScripts gate)
+
+              if sweeps then
+                  Expect.contains
+                      record.Value.Reads
+                      "**"
+                      "the gate sweeps the tracked set: every tracked file is then a gate input, and the record must read `**`"
           }
 
           test "GO-RED — a locator-bearing source that combines the root with a path reads it" {

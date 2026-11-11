@@ -1,5 +1,59 @@
 # Fuaran.DB — decisions (newest first)
 
+## 2026-11-11 — D14: published from the line its first consumers build on (Phase 32)
+
+This repository has its first consumers, and both restore from nuget.org alone. The decisions that make it
+publishable are taken together here; the two acts that publish it (the repository made public, and the
+nuget.org Trusted Publishing policy registered for `Fuaran.DB*` against `publish.yml`) are the operator's.
+
+1. **The dependency line is `Fuaran.Core.*` 0.40.2 and `Fuaran.Compute.DataFrame` 0.43.0.** Read at the
+   decision from the producers' tags and from nuget.org, never from a `<Version>`: Core is tagged and served
+   through 0.42.0, Compute through 0.44.0 (a 0.45.0 is cut and neither tagged nor served). This repository
+   pinned 0.42.0 / 0.44.0; its first package consumer pins 0.40.2 / 0.43.0, and holds there because Compute
+   0.44.0 carries a Core floor of 0.41.0, which moves it only with a raise of its other Core-built
+   dependencies. A module that consumes both restores one version of each family, so the lines must meet.
+   Meeting on the lower line costs this repository nothing: the source did not change across 0.43.0 to
+   0.44.0 or across 0.40.2 to 0.42.0, the whole suite passes on 0.40.2 / 0.43.0 (215 passed, the
+   conformance kit 69 agreed per dialect, the wire corpus and the placement laws held), and every packed
+   package's restore graph names exactly one Core version and one Compute version. Meeting on the higher
+   line would have made the consumer's raise a precondition of the first release. So no consumer is raised
+   for this; the next raise of the line is the consumer's and this repository's together. One property per
+   producing repository (`FuaranCoreVersion`, `FuaranComputeVersion`) carries it, so the two families can
+   never be raised half way.
+2. **Not a member of the Core and Compute release cohort.** The cohort is the set of build domains raised in
+   one sweep when one of them cuts, because every side compiles against them. This repository consumes them
+   and nothing in that set consumes it; it moves by its own changes, as the other consumer domains do. A
+   cohort sweep that raises Core or Compute does not have to raise it, and its own pins are chosen by rule 1.
+3. **The publication boundary is a gate** (`gates/check-publication-boundary.ps1`), run on the head by
+   `run.ps1` and with `-History` by CI and by the publish workflow. It sweeps the tracked set for the names a
+   reader outside this repository cannot look up: private component, product and client names, an operator
+   command and tool surface, machine and actor identifiers, absolute paths, and relative paths that leave
+   the repository. A confidential name is held as the SHA-256 of its lower-cased form and matched word by
+   word, so the gate does not publish what it bans. A hit that cannot be fixed is an itemised, counted,
+   printed entry: the copyright holder in `LICENSE`, `NOTICE` and the package metadata; the dependency guard
+   of D3, which names the package family it refuses; and `pack.ps1`'s development feed default.
+   `-History` reads every commit's message and every line any commit added (merges against each parent), so
+   every tree in the history is read without checking one out. **The sweep at this decision**, over every
+   commit reachable from any ref (28 commits, 23,959 added lines), **is clean but for one message**: a
+   dependency raise records that its pins were recorded in a version ledger at the root of the tree it was
+   developed in. It names no repository, product or person. A recorded message cannot be edited in an
+   ordinary change; the remedies are to rewrite the published history or to publish with it, and that choice
+   is the operator's at the flip. It is carried as an itemised history entry, printed by every `-History` run,
+   so the choice is taken knowingly.
+4. **CI and publication.** `ci.yml` runs the history sweep and `verify.ps1` on every push. `publish.yml`, on
+   a `v*` tag, refuses a tag that does not name `<Version>`, sweeps and gates the tagged commit, packs the six
+   packages into a directory of its own, refuses any id that is not `Fuaran.DB.*`, and pushes through
+   nuget.org Trusted Publishing: the `NuGet/login` step names the policy owner's public profile, never a
+   secret. The engine-backed dialect legs stay Pending on both, as they are without `FUARAN_DB_SQLSERVER` and
+   `FUARAN_DB_POSTGRESQL`.
+5. **The version rides: 0.1.0 is the release slot.** Nothing is tagged, served or pinned from a public
+   feed, so 0.1.0 is a draft. The surface guard, over the six packages packed at the previous head and at this
+   one, reports every surface unchanged: the line moving down lowers each floor and changes no type. The
+   first `v0.1.0` tag releases it, and `STABILITY.md` drops DRAFT from its heading in that act.
+
+*Reopen* (1) when the consumer raises its line, or when this repository needs a Core or Compute release its
+consumer does not build on; (3) when the history entry is resolved either way at the flip.
+
 ## 2026-11-05 — D13: the posture over Compute 0.43.0's new verbs and expressions
 
 Compute 0.43.0 adds three verbs (`Define`, `Fit`, `Predict`) and three expressions (`Arg`, `Call`,

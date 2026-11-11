@@ -1,0 +1,112 @@
+name: publish
+
+# Pushes the six Fuaran.DB packages to nuget.org. Triggered by a tag matching `v*`, the release
+# gesture, or by workflow_dispatch against an existing tag. The version packed is the <Version> in
+# Directory.Build.props at the tagged commit, and the tag must name it: a tag that disagrees is
+# refused rather than publishing a number nobody chose.
+#
+# A push to a branch reaches nothing here. Publication is a deliberate act, never a side effect of
+# landing work.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # Lets the job request the GitHub OIDC token that nuget.org's Trusted Publishing exchanges for a
+  # short-lived API key. No long-lived secret exists to rotate or to leak.
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: The tag names the version being packed
+        shell: pwsh
+        run: |
+          $version = ([xml](Get-Content Directory.Build.props)).Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
+          $tag = '${{ github.ref_name }}'
+          if ($tag -ne "v$version") {
+            Write-Error "tag '$tag' does not name the version in Directory.Build.props ('v$version'); refusing to publish"
+            exit 1
+          }
+          Write-Host "publishing $version"
+
+      # What is published was swept and gated at this commit, not only at some earlier one.
+      - name: Publication boundary, head and history
+        shell: pwsh
+        run: ./gates/check-publication-boundary.ps1 -History
+
+      - name: Verify
+        shell: pwsh
+        run: ./verify.ps1
+
+      # Into a directory of this run's own, so the push below publishes this repository's output
+      # and nothing else that happens to sit in a shared folder.
+      - name: Pack
+        shell: pwsh
+        run: |
+          $projects = @(
+            'src/Fuaran.DB/Fuaran.DB.fsproj'
+            'src/Fuaran.DB.Provider/Fuaran.DB.Provider.fsproj'
+            'src/Fuaran.DB.Dialect.SqlServer/Fuaran.DB.Dialect.SqlServer.fsproj'
+            'src/Fuaran.DB.Dialect.PostgreSql/Fuaran.DB.Dialect.PostgreSql.fsproj'
+            'src/Fuaran.DB.Conformance/Fuaran.DB.Conformance.fsproj'
+            'src/Fuaran.DB.Session/Fuaran.DB.Session.fsproj'
+          )
+          foreach ($p in $projects) {
+            dotnet pack $p -c Release -o "${{ github.workspace }}/artifacts" --nologo
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          $packed = @(Get-ChildItem "${{ github.workspace }}/artifacts" -Filter *.nupkg)
+          if ($packed.Count -ne $projects.Count) {
+            Write-Error "expected $($projects.Count) packages, packed $($packed.Count)"
+            exit 1
+          }
+
+      # Trusted Publishing: a policy on nuget.org (owner, repository, this workflow's file name)
+      # exchanges the job's OIDC token for a one-hour key. `user` is the nuget.org profile that owns
+      # the policy; a profile name is public, so it is written here rather than held as a secret.
+      # The login sits immediately before the push so the key cannot expire mid-run.
+      - name: NuGet login (OIDC to a temporary API key)
+        uses: NuGet/login@v1
+        id: nuget-login
+        with:
+          user: ajwillshire
+
+      - name: Push to nuget.org
+        run: |
+          shopt -s nullglob
+          pkgs=("$GITHUB_WORKSPACE"/artifacts/*.nupkg)
+          if [ ${#pkgs[@]} -eq 0 ]; then
+            echo "no .nupkg in artifacts/: Pack produced nothing" >&2
+            exit 1
+          fi
+          # Refuse an id this repository does not own: an unexpected id does not exist on nuget.org,
+          # so --skip-duplicate would CREATE it rather than skip it.
+          for pkg in "${pkgs[@]}"; do
+            case "$(basename "$pkg")" in
+              Fuaran.DB.*) ;;
+              *)
+                echo "refusing to push unexpected package id: $(basename "$pkg")" >&2
+                exit 1
+                ;;
+            esac
+          done
+          for pkg in "${pkgs[@]}"; do
+            dotnet nuget push "$pkg" \
+              --source https://api.nuget.org/v3/index.json \
+              --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" \
+              --skip-duplicate
+          done

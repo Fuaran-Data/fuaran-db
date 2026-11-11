@@ -1,0 +1,40 @@
+name: ci
+
+# The repository gate on every push and pull request: the same command a contributor runs locally,
+# so CI and local never disagree about what green means. Nothing here publishes or deploys;
+# publication is publish.yml, on a `v*` tag only.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      # The whole history: the boundary sweep below reads every commit, and a shallow clone would
+      # sweep one and call it the history.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      # Every commit's message and every line any commit added, with the head's verdict. The gate
+      # below sweeps the head again; this is the leg a publication needs (DECISIONS D14).
+      - name: Publication boundary, head and history
+        shell: pwsh
+        run: ./gates/check-publication-boundary.ps1 -History
+
+      # Format, build, the Expecto suite. Every package restores from nuget.org. The engine-backed
+      # dialect legs report Pending: no FUARAN_DB_SQLSERVER or FUARAN_DB_POSTGRESQL is set here, so
+      # no database is created and none is needed.
+      - name: Verify
+        shell: pwsh
+        run: ./verify.ps1
