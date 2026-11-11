@@ -35,8 +35,8 @@
   <ItemGroup>
     <!-- Released versions, resolvable from the public feed alone (DECISIONS.md D2.10, D4). -->
     <PackageReference Update="FSharp.Core" Version="10.1.300" />
-    <PackageReference Include="Fuaran.Core.Conformance" Version="0.40.3" />
-    <PackageReference Include="Fuaran.Compute.DataFrame" Version="0.43.0" />
+    <PackageReference Include="Fuaran.Core.Conformance" Version="0.42.0" />
+    <PackageReference Include="Fuaran.Compute.DataFrame" Version="0.44.0" />
   </ItemGroup>
 
   <ItemGroup>
