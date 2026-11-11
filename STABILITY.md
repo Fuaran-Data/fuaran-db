@@ -302,12 +302,11 @@ Riding the draft (2026-11-05), on the same terms: the Compute pin moves to 0.43.
 
 Riding the draft (Phase 32), on the same terms: the release slot (DECISIONS.md D14).
 
-- **No surface change — the dependency line moves to `Fuaran.Core.*` 0.40.2 and
-  `Fuaran.Compute.DataFrame` 0.43.0**, one property per producing repository (`FuaranCoreVersion`,
-  `FuaranComputeVersion` in `Directory.Build.props`). Each package's floor is lower than the 0.42.0 / 0.44.0
-  this draft was last built on, so a consumer resolving the newer line still resolves; one on the 0.40.2 /
-  0.43.0 line no longer needs a raise to take this one. The surface guard, rendering all six packages packed
-  at the previous head and at this one, reports every surface unchanged, so the change rides.
+- **No surface change — the dependency line stays at `Fuaran.Core.*` 0.42.0 and
+  `Fuaran.Compute.DataFrame` 0.44.0**, the newest published, now carried by one property per producing
+  repository (`FuaranCoreVersion`, `FuaranComputeVersion` in `Directory.Build.props`). A consumer on the
+  0.40.2 / 0.43.0 line raises to it before taking this one. The surface guard, rendering all six packages
+  packed at the previous head and at this one, reports every surface unchanged, so the change rides.
 - **The release slot is 0.1.0.** Nothing is tagged, nothing is on a public feed and no consumer pins it from
   one, so the draft is released under its own number: the first `v0.1.0` tag publishes the six packages
   (`.github/workflows/publish.yml`), and this heading drops DRAFT in that act, not before. A change landing

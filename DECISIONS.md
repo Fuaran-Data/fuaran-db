@@ -6,20 +6,20 @@ This repository has its first consumers, and both restore from nuget.org alone. 
 publishable are taken together here; the two acts that publish it (the repository made public, and the
 nuget.org Trusted Publishing policy registered for `Fuaran.DB*` against `publish.yml`) are the operator's.
 
-1. **The dependency line is `Fuaran.Core.*` 0.40.2 and `Fuaran.Compute.DataFrame` 0.43.0.** Read at the
-   decision from the producers' tags and from nuget.org, never from a `<Version>`: Core is tagged and served
-   through 0.42.0, Compute through 0.44.0 (a 0.45.0 is cut and neither tagged nor served). This repository
-   pinned 0.42.0 / 0.44.0; its first package consumer pins 0.40.2 / 0.43.0, and holds there because Compute
-   0.44.0 carries a Core floor of 0.41.0, which moves it only with a raise of its other Core-built
-   dependencies. A module that consumes both restores one version of each family, so the lines must meet.
-   Meeting on the lower line costs this repository nothing: the source did not change across 0.43.0 to
-   0.44.0 or across 0.40.2 to 0.42.0, the whole suite passes on 0.40.2 / 0.43.0 (215 passed, the
-   conformance kit 69 agreed per dialect, the wire corpus and the placement laws held), and every packed
-   package's restore graph names exactly one Core version and one Compute version. Meeting on the higher
-   line would have made the consumer's raise a precondition of the first release. So no consumer is raised
-   for this; the next raise of the line is the consumer's and this repository's together. One property per
-   producing repository (`FuaranCoreVersion`, `FuaranComputeVersion`) carries it, so the two families can
-   never be raised half way.
+1. **The dependency line is `Fuaran.Core.*` 0.42.0 and `Fuaran.Compute.DataFrame` 0.44.0, the newest
+   published.** Read at the decision from the producers' tags and from nuget.org, never from a `<Version>`:
+   Core is tagged and served through 0.42.0, Compute through 0.44.0 (a 0.45.0 is cut and neither tagged nor
+   served, so a public-path pin cannot name it). Its first package consumer pins 0.40.2 / 0.43.0, and a
+   module that consumes both restores one version of each family, so the lines must meet. They meet on the
+   newer line: the consumer raises to it before it takes its dependency on this repository. Meeting on the
+   older one was measured and is feasible (the source did not change across the two lines, and the whole
+   suite passed on 0.40.2 / 0.43.0), but it was declined: a pin should name a version its producer can still
+   emit, so a first release built on the older line would lag from its first day, and when lines meet the
+   lagging consumer moves forward rather than this repository back. So the consumer's raise to
+   0.42.0 / 0.44.0 is a precondition of its dependency on these packages, not of this release. One property
+   per producing repository (`FuaranCoreVersion`, `FuaranComputeVersion`) carries the line, so the two
+   families can never be raised half way. _(Amended the same day by the operator's decision, which reversed
+   the first choice of the lower line.)_
 2. **Not a member of the Core and Compute release cohort.** The cohort is the set of build domains raised in
    one sweep when one of them cuts, because every side compiles against them. This repository consumes them
    and nothing in that set consumes it; it moves by its own changes, as the other consumer domains do. A
