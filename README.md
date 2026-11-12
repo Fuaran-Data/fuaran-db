@@ -26,7 +26,7 @@ Pre-release, and **not yet published**: no package of this repository is on nuge
 tagged. The first release is 0.1.0, of six packages (`Fuaran.DB`, `Fuaran.DB.Provider`,
 `Fuaran.DB.Dialect.SqlServer`, `Fuaran.DB.Dialect.PostgreSql`, `Fuaran.DB.Conformance` and
 `Fuaran.DB.Session`), pushed to nuget.org from a `v0.1.0` tag by
-[`publish.yml`](.github/workflows/publish.yml). Until then, build from source: every dependency already
+[`publish-packages.yml`](.github/workflows/publish-packages.yml). Until then, build from source: every dependency already
 restores from nuget.org, at `Fuaran.Core.*` 0.42.0 and `Fuaran.Compute.DataFrame` 0.44.0.
 
 `Fuaran.DB` holds the dataset model: its node kinds and op vocabulary, the model rules, the

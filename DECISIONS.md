@@ -4,7 +4,7 @@
 
 This repository has its first consumers, and both restore from nuget.org alone. The decisions that make it
 publishable are taken together here; the two acts that publish it (the repository made public, and the
-nuget.org Trusted Publishing policy registered for `Fuaran.DB*` against `publish.yml`) are the operator's.
+nuget.org Trusted Publishing policy registered for `Fuaran.DB*` against `publish-packages.yml`) are the operator's.
 
 1. **The dependency line is `Fuaran.Core.*` 0.42.0 and `Fuaran.Compute.DataFrame` 0.44.0, the newest
    published.** Read at the decision from the producers' tags and from nuget.org, never from a `<Version>`:
@@ -40,7 +40,7 @@ nuget.org Trusted Publishing policy registered for `Fuaran.DB*` against `publish
    ordinary change; the remedies are to rewrite the published history or to publish with it, and that choice
    is the operator's at the flip. It is carried as an itemised history entry, printed by every `-History` run,
    so the choice is taken knowingly.
-4. **CI and publication.** `ci.yml` runs the history sweep and `verify.ps1` on every push. `publish.yml`, on
+4. **CI and publication.** `ci.yml` runs the history sweep and `verify.ps1` on every push. `publish-packages.yml`, on
    a `v*` tag, refuses a tag that does not name `<Version>`, sweeps and gates the tagged commit, packs the six
    packages into a directory of its own, refuses any id that is not `Fuaran.DB.*`, and pushes through
    nuget.org Trusted Publishing: the `NuGet/login` step names the policy owner's public profile, never a

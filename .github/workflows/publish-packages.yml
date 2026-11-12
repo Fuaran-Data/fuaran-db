@@ -1,4 +1,4 @@
-name: publish
+name: publish-packages
 
 # Pushes the six Fuaran.DB packages to nuget.org. Triggered by a tag matching `v*`, the release
 # gesture, or by workflow_dispatch against an existing tag. The version packed is the <Version> in

@@ -193,7 +193,7 @@ LEGAL ENTITY, NOT A REPOSITORY. The copyright holder, in the licence and attribu
 $rWhyDevFeed = @'
 THE DEVELOPMENT LOOP'S FOLDER FEED. pack.ps1 packs into a local folder feed by default, the
         layout this repository is developed in; -Feed names any other folder, and publication
-        packs into the runner's own directory instead (.github/workflows/publish.yml). The
+        packs into the runner's own directory instead (.github/workflows/publish-packages.yml). The
         default is a convenience of one development tree, stated so a reader can see it.
 '@
 

@@ -309,5 +309,5 @@ Riding the draft (Phase 32), on the same terms: the release slot (DECISIONS.md D
   packed at the previous head and at this one, reports every surface unchanged, so the change rides.
 - **The release slot is 0.1.0.** Nothing is tagged, nothing is on a public feed and no consumer pins it from
   one, so the draft is released under its own number: the first `v0.1.0` tag publishes the six packages
-  (`.github/workflows/publish.yml`), and this heading drops DRAFT in that act, not before. A change landing
+  (`.github/workflows/publish-packages.yml`), and this heading drops DRAFT in that act, not before. A change landing
   between now and the tag rides or advances by the rule above, as any other.
