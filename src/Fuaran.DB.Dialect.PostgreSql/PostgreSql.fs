@@ -220,7 +220,18 @@ module PostgreSql =
             | DateType
             | DecimalType -> None
             | TimestampType _ -> typeRefusal ty
-        | Construct.Cast _ -> Some "PostgreSQL's CAST coerces where the reference refuses"
+        // The provider asks only about the conversions its declared subset admits (an int to a float
+        // or a bool, a bool to an int, DECISIONS.md D15.2); each of the three means in PostgreSQL what
+        // it means in the reference. Every other target is refused by name, should the subset widen.
+        | Construct.Cast ty ->
+            match ty with
+            | IntType
+            | FloatType
+            | BoolType -> None
+            | StringType -> Some "PostgreSQL's CAST to text formats a float and a boolean by its own rules"
+            | DecimalType -> Some "PostgreSQL's CAST to numeric keeps a scale the reference does not state"
+            | DateType
+            | TimestampType _ -> Some "PostgreSQL's CAST parses a string by the session's DateStyle"
         | Construct.Rounding _ ->
             Some "decimal scale on division: PostgreSQL scales and rounds a numeric result by its own rule"
         | Construct.EmptyList -> Some "PostgreSQL cannot spell IN ()"
@@ -290,9 +301,9 @@ module PostgreSql =
         // Aggregates render through `aggregate`, joins and parameters through the provider's renderer,
         // and the excluded constructs never reach a dialect; spelled for totality only.
         | Construct.Aggregate fn -> call ((sprintf "%A" fn).ToLowerInvariant()) args
+        | Construct.Cast ty -> "CAST(" + one args + " AS " + mapType ty + ")"
         | Construct.Join _
         | Construct.Parameter _
-        | Construct.Cast _
         | Construct.Rounding _
         | Construct.EmptyList
         | Construct.Interpolation -> one args

@@ -52,6 +52,26 @@ argument, as the reference answers, where `SQRT` would raise). Operators `+`, `-
 (`AVG` over a `float` cast), `Min` and `Max` (over `bit` through `tinyint`). Every join kind the provider
 lowers.
 
+### Derived columns
+
+A `Derive` the provider lowers (its column's type decided by the schema, its expression in the declared
+subset) is a select of computed columns, and a grouping keyed by one groups that select. Each expression
+form in a computed column, against the reference:
+
+| Form | T-SQL | Against the reference |
+|---|---|---|
+| `Case` | `(CASE WHEN … THEN … ELSE … END)`; a missing otherwise is a typed null parameter | matches: the first branch whose condition holds, an untaken branch not evaluated |
+| `Coalesce` | `COALESCE(…)` over arms of one type | matches; arms of two types are undecided and stay local, so T-SQL's own type precedence is never reached |
+| `Cast` to `float` from `int` | `CAST(x AS float)` | matches: exact over int32 |
+| `Cast` to `bit` from `int` | `CAST(x AS bit)` | matches: any non-zero integer is 1, as the reference reads it as true |
+| `Cast` to `int` from `bit` | `CAST(x AS int)` | matches: 1 and 0 |
+| `Cast` to `nvarchar`, `decimal`, `date`, `datetime2` | refused | T-SQL formats a number, a bit and a date as text by its own rules, takes the declared scale of `decimal(38, 10)`, and parses a string by the session's language settings |
+| `Not`, `IsNull`, `InList`, a comparison | a condition read as a value, `(CASE WHEN c THEN CAST(1 AS bit) WHEN NOT c THEN CAST(0 AS bit) END)` | matches, keeping the third value |
+| `Abs`, `Round`, `Floor`, `Ceil`, `Trim`, `Sqrt`, `+`, `-`, `*` | as in a predicate, above | matches, with the refusals below unchanged |
+
+The provider admits only those three cast pairs, a cast to the operand's own type and a cast of a null;
+the dialect's `Cast` refusals name the rest, should the provider's subset widen.
+
 ## Every refusal it declares
 
 Each places the fold boundary at the step that uses it, and the step runs locally in the reference
@@ -74,12 +94,13 @@ evaluator. The conformance kit has a fixture reaching each one.
 | `Median` | T-SQL has no median aggregate; `PERCENTILE_CONT` is a window function |
 | `StdDev` | `STDEVP` sums in the engine's order; not measured |
 | `First`, `Last` | an aggregate over a relation reads no row order |
-| `Cast` | `CAST` coerces where the reference refuses |
+| `Cast` to `nvarchar`, `decimal`, `date`, `datetime2` | `CAST` formats, scales and parses by T-SQL's own rules (D15) |
 | `Quotient`, `Rounded` | decimal scale on division: T-SQL scales and rounds a decimal result by its own rule |
 | an empty `IN` list | T-SQL cannot spell `IN ()` |
 
-`Lower`, `Upper`, `Length`, `Median`, `StdDev`, `First`, `Last`, `Cast`, the exact roundings and the empty
-list are also outside the provider's own declared subset, which refuses them first.
+`Lower`, `Upper`, `Length`, `Median`, `StdDev`, `First`, `Last`, every cast but the three it admits, the
+exact roundings and the empty list are also outside the provider's own declared subset, which refuses them
+first.
 
 ## Every difference it pins
 
@@ -99,3 +120,8 @@ list are also outside the provider's own declared subset, which refuses them fir
 agreed, differing as pinned or differing unexpectedly. The repository's suite runs it against a server
 when `FUARAN_DB_SQLSERVER` holds a connection string, creating and dropping a database for the run, and
 reports the leg as Pending when it does not.
+
+**The recorded run with derived columns** (`DECISIONS.md` D15) was made on SQL Server 2025 LocalDB
+17.0.4025.3 (Express Edition, 64-bit), collation `SQL_Latin1_General_CP1_CI_AS`: of 91 fixtures, 89 agreed,
+2 differed as pinned (the collation pair) and 0 differed unexpectedly. Every derive fixture agreed on the
+engine, the first consumer's roll-up among them.

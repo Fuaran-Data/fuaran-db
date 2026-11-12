@@ -152,8 +152,19 @@ module FoldSplit =
     let explain (admitted: Admitted) (dialect: Dialect) (bindings: Bindings) : Result<SplitReport, Refusal> =
         lower admitted dialect bindings |> Result.map _.Split
 
-    /// The split as sentences: what the planner rewrote, which steps lower, and where the boundary
-    /// fell and why.
+    /// The derives that lowered: each lowered `Derive` step's index (from 1, in the planned pipeline)
+    /// and the column it computes in the statement (DECISIONS.md D15).
+    let derived (report: SplitReport) : (int * string) list =
+        report.Plan.Planned
+        |> List.truncate report.Lowered
+        |> List.indexed
+        |> List.choose (fun (i, t) ->
+            match t with
+            | Derive(name, _) -> Some(i + 1, name)
+            | _ -> None)
+
+    /// The split as sentences: what the planner rewrote, which steps lower, each derive that lowered,
+    /// and where the boundary fell and why.
     let describe (report: SplitReport) : string list =
         let planned = List.length report.Plan.Planned
 
@@ -174,7 +185,15 @@ module FoldSplit =
             | None -> [ "every planned step lowers; nothing runs locally" ]
             | Some r -> [ sprintf "the boundary falls at step %d: %s" (Refusal.step r) (Refusal.describe r) ]
 
-        rewrites @ [ lowered ] @ boundary
+        let derives =
+            derived report
+            |> List.map (fun (step, name) ->
+                sprintf
+                    "step %d derives the column '%s' in the statement, as a computed column of its select"
+                    step
+                    name)
+
+        rewrites @ [ lowered ] @ derives @ boundary
 
     /// Run the suffix over the statement's result, in the reference evaluator, under the same
     /// bindings — the second half of the placement. The suffix is already bound, so the clock it

@@ -2,7 +2,7 @@
   <PropertyGroup>
     <!-- The one version every package in this repository is cut at, read by pack.ps1's same-version
          guard. STABILITY.md says whether the standing number is a draft slot or a released one. -->
-    <Version>0.1.0</Version>
+    <Version>0.2.0</Version>
     <Authors>Andrew J. Willshire</Authors>
     <Company>Diametrical Ltd</Company>
     <Copyright>Copyright 2026 Diametrical Ltd</Copyright>

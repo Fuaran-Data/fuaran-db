@@ -71,6 +71,20 @@ A date binds as a `DateOnly`, and a timestamp as a `DateTime` of unspecified kin
   - `Mean`, as `avg` over a `double precision` cast.
   - `Min` and `Max`. Over `boolean` they are `bool_and` and `bool_or`.
 - **Joins:** every join kind the provider lowers.
+- **Derived columns** (`DECISIONS.md` D15): a `Derive` the provider lowers is a select of computed
+  columns, and a grouping keyed by one groups that select. A computed string is read under `C` like any
+  other, because its arms are scanned columns and parameters, each already written `COLLATE "C"`.
+
+  | Form | PostgreSQL | Against the reference |
+  |---|---|---|
+  | `Case` | `(CASE WHEN … THEN … ELSE … END)`; a missing otherwise is a typed null parameter | matches |
+  | `Coalesce` | `COALESCE(…)` over arms of one type | matches; arms of two types are undecided and stay local |
+  | `Cast` to `double precision` from `integer` | `CAST(x AS double precision)` | matches: exact over int32 |
+  | `Cast` to `boolean` from `integer` | `CAST(x AS boolean)` | matches: any non-zero integer is true |
+  | `Cast` to `integer` from `boolean` | `CAST(x AS integer)` | matches: 1 and 0 |
+  | `Cast` to `text`, `numeric`, `date`, `timestamp` | refused | PostgreSQL formats a float and a boolean as text by its own rules, keeps a scale the reference does not state, and parses a string by the session's `DateStyle` |
+  | `Not`, `IsNull`, `InList`, a comparison | a condition, which is a boolean value here | matches |
+  | the functions and operators above | as in a predicate | matches |
 
 ## Every refusal it declares
 
@@ -92,7 +106,7 @@ reference evaluator. The conformance kit has a fixture that reaches each one.
 | `Median` | the median is the ordered-set aggregate `percentile_cont`, which answers a double for every input type; not measured |
 | `StdDev` | `stddev_pop` sums in the engine's order; not measured |
 | `First`, `Last` | an aggregate over a relation reads no row order |
-| `Cast` | `CAST` coerces where the reference refuses |
+| `Cast` to `text`, `numeric`, `date`, `timestamp` | `CAST` formats, scales and parses by PostgreSQL's own rules (D15) |
 | `Quotient`, `Rounded` | decimal scale on division: PostgreSQL scales and rounds a numeric result by its own rule |
 | an empty `IN` list | PostgreSQL cannot spell `IN ()` |
 
@@ -129,3 +143,6 @@ change to this dialect, which therefore needed none. Over the ICU root locale th
 in-memory run cannot: the spelling, the type map in both directions, result decoding, the `COLLATE "C"`
 read, the `Round` formula (`filter-round`), and the four constructs SQL Server refuses (`reach-replace`,
 `reach-contains`, `reach-starts-with`, `reach-ends-with`).
+
+The derive fixtures (`DECISIONS.md` D15) have not yet been run on a PostgreSQL engine: the in-memory run
+lowers all 91 fixtures through this dialect and agrees on all 91, and the engine leg arms as before.

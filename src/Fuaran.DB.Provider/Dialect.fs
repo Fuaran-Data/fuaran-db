@@ -27,8 +27,8 @@ type Dialect =
         /// re-declares it here, so the comparison the statement makes is the reference's and not the
         /// source's (DECISIONS.md D11).
         ReadValue: ColumnType -> string -> string
-        /// Render a scalar function or an operator over its already-rendered arguments. Called only
-        /// for a construct `Refuses` admitted. A logical operator's arguments arrive as conditions,
+        /// Render a scalar function, an operator or a cast over its already-rendered arguments. Called
+        /// only for a construct `Refuses` admitted. A logical operator's arguments arrive as conditions,
         /// every other argument as a value.
         RenderFunction: Construct -> string list -> string
         /// Render an aggregate over its already-rendered argument, given the type of the column it
@@ -91,7 +91,8 @@ module Render =
             | Scalar.Parameter _
             | Scalar.Function _
             | Scalar.Coalesce _
-            | Scalar.Case _ -> false
+            | Scalar.Case _
+            | Scalar.Cast _ -> false
 
         let rec value (s: Scalar) : string =
             if isCondition s then
@@ -119,7 +120,8 @@ module Render =
             | Scalar.Parameter _
             | Scalar.Function _
             | Scalar.Coalesce _
-            | Scalar.Case _ -> valueForm s
+            | Scalar.Case _
+            | Scalar.Cast _ -> valueForm s
 
         /// A value-yielding form (and a comparison, whose operands are values), rendered as written.
         and valueForm (s: Scalar) : string =
@@ -137,6 +139,7 @@ module Render =
                 + " ELSE "
                 + value otherwise
                 + " END)"
+            | Scalar.Cast(ty, x) -> d.RenderFunction (Construct.Cast ty) [ value x ]
             | Scalar.Not _
             | Scalar.IsNull _
             | Scalar.InList _ -> conditionForm s
@@ -165,6 +168,15 @@ module Render =
             "SELECT "
             + (columns
                |> List.map (fun (a, o) -> q a + " AS " + q o.Alias)
+               |> String.concat ", ")
+            + " FROM "
+            + src
+        | Relation.Derive(input, columns) ->
+            let src, _ = from input
+
+            "SELECT "
+            + (columns
+               |> List.map (fun (s, o) -> value s + " AS " + q o.Alias)
                |> String.concat ", ")
             + " FROM "
             + src

@@ -586,5 +586,100 @@ module Fixtures =
                   IsNull(Interpolate(Col "price", [ 0.0, 0.0; 10.0, 1.0 ], InterpKind.Linear, InterpOutside.Clamp))
               )) ]
 
+    /// The derived columns (DECISIONS.md D15): one fixture per expression form a lowered derive may
+    /// compute, over all-null and empty inputs as well as the seed, and the first consumer's roll-up — a
+    /// grouping keyed by derived bands with a sum and a distinct count.
+    let derives: Fixture list =
+        let derive (id: string) (description: string) (steps: Transform list) = fixture id description "orders" steps
+
+        let band =
+            Case(
+                [ ge (Col "amount") (Lit(dec "10")), str "high"
+                  ge (Col "amount") (Lit(dec "5")), str "mid" ],
+                str "low"
+            )
+
+        [ derive "derive-column" "a column carried as a derived column" [ Derive("q", Col "qty") ]
+          derive "derive-value" "a literal value, bound as a parameter" [ Derive("tag", str "batch") ]
+          derive
+              "derive-arithmetic"
+              "float arithmetic computed per row"
+              [ Derive("doubled", Binary(Sub, Binary(Mul, Col "price", float 2.0), float 0.5)) ]
+          derive
+              "derive-comparison"
+              "a comparison read as a boolean value, null where its operand is"
+              [ Derive("large", gt (Col "qty") (int 3)) ]
+          derive "derive-not" "three-valued negation of a boolean column" [ Derive("unflagged", Not(Col "flag")) ]
+          derive "derive-is-null" "the presence test, never null" [ Derive("no_channel", IsNull(Col "channel")) ]
+          derive
+              "derive-coalesce-default"
+              "a default for a missing string"
+              [ Derive("channel_or", Coalesce [ Col "channel"; str "unknown" ]) ]
+          derive
+              "derive-coalesce-mixed"
+              "a COALESCE whose arms differ in type, a float column then an integer column: the cells decide its type, so it stays local"
+              [ Derive("price_or_qty", Coalesce [ Col "price"; Col "qty" ]) ]
+          derive
+              "derive-coalesce-cast"
+              "a COALESCE whose arms differ in type until a cast aligns them, which decides the type and lowers"
+              [ Derive("price_or_qty", Coalesce [ Col "price"; Cast(FloatType, Col "qty") ]) ]
+          derive
+              "derive-case"
+              "a banded CASE over an integer column"
+              [ Derive(
+                    "size",
+                    Case([ ge (Col "qty") (int 5), str "high"; ge (Col "qty") (int 3), str "mid" ], str "low")
+                ) ]
+          derive
+              "derive-case-no-else"
+              "a CASE whose otherwise branch is null"
+              [ Derive("new", Case([ Col "flag", str "yes" ], Lit Null)) ]
+          derive
+              "derive-in-list"
+              "three-valued membership, computed per row"
+              [ Derive("online", InList(Col "channel", [ str "web"; str "phone" ])) ]
+          derive "derive-cast-int-float" "an integer cast to a float" [ Derive("qty_f", Cast(FloatType, Col "qty")) ]
+          derive "derive-cast-bool-int" "a boolean cast to an integer" [ Derive("flag_n", Cast(IntType, Col "flag")) ]
+          derive "derive-cast-int-bool" "an integer cast to a boolean" [ Derive("cust_b", Cast(BoolType, Col "cust")) ]
+          derive
+              "derive-function"
+              "ROUND and TRIM computed per row"
+              [ Derive("rounded", fn Round [ Col "price" ])
+                Derive("trimmed", fn Trim [ Col "note" ]) ]
+          derive
+              "derive-all-null"
+              "a derive over a column holding only nulls"
+              [ Filter(IsNull(Col "qty"))
+                Derive("qty_f", Coalesce [ Cast(FloatType, Col "qty"); Col "price" ]) ]
+          derive
+              "derive-null-literal"
+              "a column of nulls, typed by its cast"
+              [ Derive("nothing", Cast(StringType, Lit Null)) ]
+          derive "derive-empty" "a derive over no rows" [ Filter(gt (Col "id") (int 100)); Derive("band", band) ]
+          derive
+              "derive-group-empty"
+              "a grouping by a derived key over no rows answers none"
+              [ Filter(gt (Col "id") (int 100))
+                Derive("band", band)
+                GroupBy([ "band" ], [ agg "n" Count "id" ]) ]
+          derive
+              "derive-group-by-band"
+              "a grouping keyed by a derived band"
+              [ Derive("band", band)
+                GroupBy([ "band" ], [ agg "n" Count "id"; agg "qty" Sum "qty" ]) ]
+          derive
+              "derive-spend-band-rollup"
+              "the first consumer's roll-up: spend band and shopper type, a summed decimal, a distinct count, and a sum of the orders stating a spend"
+              [ Filter(Not(IsNull(Col "id")))
+                Derive("band", band)
+                Derive("shopper", Case([ Col "flag", str "new" ], str "returning"))
+                Derive("stated", Case([ IsNull(Col "amount"), int 0 ], int 1))
+                GroupBy(
+                    [ "band"; "shopper" ],
+                    [ agg "spend" Sum "amount"
+                      agg "customers" CountDistinct "cust"
+                      agg "stating" Sum "stated" ]
+                ) ] ]
+
     /// Every fixture of the kit.
-    let all: Fixture list = subset @ differences @ refusals
+    let all: Fixture list = subset @ differences @ refusals @ derives

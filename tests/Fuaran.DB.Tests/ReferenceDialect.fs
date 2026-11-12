@@ -44,6 +44,7 @@ let private render (c: Construct) (args: string list) : string =
     | Construct.Aggregate CountDistinct, [ a ] -> "COUNT(DISTINCT " + a + ")"
     | Construct.Aggregate fn, _ -> call ((sprintf "%A" fn).ToUpperInvariant())
     | Construct.Function f, _ -> call ((sprintf "%A" f).ToUpperInvariant())
+    | Construct.Cast ty, [ a ] -> "CAST(" + a + " AS " + ColumnType.tag ty + ")"
     | _ -> call "UNRENDERABLE"
 
 /// The reference dialect: double-quoted identifiers, `@pN` markers, nulls-last ordering spelled with
@@ -100,6 +101,7 @@ let rec private toExpr (parameters: Parameter list) (s: Scalar) : ColExpr =
     | Scalar.Coalesce xs -> Coalesce(xs |> List.map go)
     | Scalar.Case(cases, otherwise) -> Case(cases |> List.map (fun (w, t) -> go w, go t), go otherwise)
     | Scalar.InList(x, items) -> InList(go x, items |> List.map go)
+    | Scalar.Cast(ty, x) -> Cast(ty, go x)
 
 let private index (schema: Schema) (alias: string) =
     schema |> List.findIndex (fun f -> f.Name = alias)
@@ -164,6 +166,19 @@ let rec private run
               Rows =
                 rows.Rows
                 |> List.map (fun row -> at |> List.map (fun i -> row[i]) |> List.toArray) })
+    | Relation.Derive(input, columns) ->
+        go input
+        |> Result.bind (fun rows ->
+            let exprs = columns |> List.map (fun (s, _) -> toExpr parameters s)
+
+            rows.Rows
+            |> traverse (fun row ->
+                exprs
+                |> traverse (DataFrame.evalExprInRow Map.empty rows.Schema (List.ofArray row))
+                |> Result.map List.toArray)
+            |> Result.map (fun out ->
+                { Schema = columns |> List.map snd |> schemaOf
+                  Rows = out }))
     | Relation.Join(left, right, kind, on, columns) ->
         go left
         |> Result.bind (fun l ->

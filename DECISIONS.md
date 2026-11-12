@@ -1,5 +1,110 @@
 # Fuaran.DB — decisions (newest first)
 
+## 2026-11-12 — D15: a statically typed `Derive` lowers, and so does a grouping keyed by it (Phase 33)
+
+D4.4 kept `Derive` out of the declared subset on recipe 07's evidence, 20 lines on "a derived column's type
+over no rows or only nulls", and named its own reopening: compute's D5 types a decided derive statically.
+The first consumer needs it. It rolls a day's orders into cubes keyed by derived bands, and with `Derive`
+outside the subset the fold split stopped before the first derive, so the whole grouping ran locally over
+order-grain rows. Seven rulings.
+
+1. **A `Derive` lowers when the schema decides its column's type and its expression is in the subset.**
+   Four conditions, asked in this order:
+   - Every node of the expression is in the declared expression subset: `Col`, values, `Binary`, `Not`,
+     `IsNull`, `Coalesce`, `Case`, `InList`, `Cast` (ruling 2) and `ApplyFn`. The exclusions D4.4 names keep
+     their refusal names (`ConstructExcluded` for `Lower`, `Upper`, `Length`, the exact roundings, an empty
+     list, an interpolation; `UnboundParam`, `UnpinnedClock`, `UnknownColumn`), and a construct the
+     dialect refuses is `DialectRefuses`, exactly as in a filter. The filter and the derive now share the
+     one check.
+   - The column's type is decided: the compute package's own static walk (`SchemaWalk.ofTransform`, the
+     rule of its D5) names a type for it. That is the typer's decided type, or a string for an expression
+     with no present value. A type the cells decide (an unbound parameter, an unpinned clock, two arms the
+     exact typer keeps apart) and a refused derive (a float beside a decimal) are undecided. **An undecided
+     derive places the boundary with the refusal every derive had before, `VerbNotLowered(step, "derive")`**,
+     and `Refusal.describe` now says the type is what kept it.
+   - The planner's totality verdict admits the step (`Plan.isTotal`), which also runs the unit check and
+     requires the decided type. A derive the reference can refuse (an int sum that can overflow, a cast
+     from a string) is `MayRefuse`, and runs where the reference reports it.
+   - The dialect admits every construct the expression carries.
+
+   *The evidence.* The class recipe 07 measured cannot reach a lowered derive: a decided column has its
+   type on every frame, full, empty or all-null alike, and an undecided one does not lower. The kit's new
+   fixtures `derive-empty`, `derive-group-empty`, `derive-all-null` and `derive-null-literal` are that class,
+   and each agrees over the in-memory interpreter and over SQL Server (ruling 6).
+
+   *A premise of the phase, checked and corrected.* The phase asked for a fixture "a `Coalesce` whose arms
+   differ in type". Such a `Coalesce` is never decided: the exact typer joins `int` and `float` to
+   undecided (compute D3), so it stays local by the rule above, and `derive-coalesce-mixed` shows that
+   boundary. The first consumer's defaults are a string column with a string default, which is decided. The
+   arms are aligned by a cast, `derive-coalesce-cast`, and then it lowers.
+
+   *Reopen* if compute's derived-typing rule changes; if an engine run reports an unexpected difference in
+   a derived value; or if a consumer needs a derive whose type its cells decide pushed down.
+
+2. **`Cast` enters the subset along the pairs whose meaning no engine reinterprets.** D4.4 excluded it
+   whole ("type affinity: the engine coerces where the reference refuses", 12 lines). The totality verdict
+   now keeps every cast the reference can refuse local, which is that class. Of the casts it admits, a cast
+   lowers only where SQL's meaning is the reference's: a cast to the operand's own type, and a cast of a
+   null literal (each lowers as the operand, read at the target type), and three conversions the dialect
+   is asked about, `int` to `float`, `int` to `bool` and `bool` to `int`. A cast to a string (each engine
+   formats a number, a bit and a date its own way), to a decimal (the engine's declared scale), to a date
+   or an instant (a parsed string), and from a float or a decimal to an int stays local, as
+   `ConstructExcluded(Cast ty)`. Both dialects refuse a cast to every other target by name, so a wider
+   subset could not reach an engine unasked. The subset is one subset: a filter's cast lowers on the same
+   terms. *Reopen* a pair on a fixture that shows an engine's answer is the reference's.
+
+3. **The form: a select of computed columns.** `Relation.Derive` carries every column through as a
+   `Scalar.Column` and computes the derived one, in place when the name is already carried (the reference
+   replaces the column at its position) and last otherwise. Every output takes a minted alias, as a
+   `Select` does, and the derived column's field is the static walk's, unit included, so the local suffix
+   reads the field the reference would have produced. `Scalar.Cast` is the one new expression form,
+   rendered through the dialect's `RenderFunction (Construct.Cast ty)`. Literals are parameters (D4.3). A
+   null takes its type from the decided column type or from what it is compared with, under the existing
+   rule. A computed column is rendered before the select it reads from, so a derive's parameters take the
+   first ordinals and the input's move up past them: the request-text law, which requires every parameter
+   to be referenced once, in the order the text renders it, holds of every statement.
+
+4. **A grouping keyed by a derived column lowers with the select that computed it, and is its own
+   placement law**: "a grouping keyed by a column a lowered derive computed equals the reference grouping
+   by that expression", with its own sample adequacy (`groupBy over a derived key`). Nothing in `groupBy`
+   changed; a derived key is an alias like any other. The sample gained seven derives that lower (a banded
+   `Case`, a `Case` with a null otherwise, a default, a cast, a derive in place, and three groupings keyed
+   by or summing a derived column) and three that place the boundary (one the reference can refuse, two whose
+   types the cells decide). The law's falsifier is a permanent test: an engine whose `CASE` takes the branch
+   whose condition fails, and whose `COALESCE` reads its arms from the last, keeps every type and is caught.
+
+5. **The dialects** (each README carries the table). SQL Server lowers `CASE`, `COALESCE` and the three
+   casts as `CAST(x AS float)`, `CAST(x AS bit)` and `CAST(x AS int)`; a condition computed as a value keeps
+   its third value through the `CASE` D8 named. PostgreSQL lowers the same table, every string still read
+   under the `C` collation, since a computed string's arms are scanned columns and parameters already
+   written `COLLATE "C"`. The functions and operators lower in a computed column exactly where they lower
+   in a predicate, with the same refusals.
+   - **One difference is recorded, not reached.** T-SQL multiplies two `decimal(38, 10)` values into
+     `decimal(38, 6)`, so a decimal product with more than six fractional digits is rounded, where the
+     reference is exact. A predicate has carried that since D8; a derived column can now return it. No
+     fixture reaches it. The seam cannot refuse it, because `Construct.Operator Mul` carries no operand
+     type, and refusing `Mul` would refuse float arithmetic too. *Reopen* the seam, or pin the difference,
+     when a consumer computes such a product.
+
+6. **The recorded SQL Server run.** SQL Server 2025 LocalDB 17.0.4025.3 (Express Edition, 64-bit),
+   collation `SQL_Latin1_General_CP1_CI_AS`, connected through the instance's named pipe with
+   `Encrypt=false` (D11.6): 91 fixtures, 89 agreed, 2 differing as pinned (`difference-collation-case` and
+   `difference-collation-order`, `CaseInsensitiveCollation`, as before), 0 differing unexpectedly. All 22
+   derive fixtures agreed on the engine, the first consumer's roll-up (`derive-spend-band-rollup`) among
+   them, and the engine falsifier went red as required. No conformance database survived the run. The
+   PostgreSQL leg was not armed: no PostgreSQL server was installed on the machine that took the phase, so
+   the in-memory run (91 of 91 agreed through that dialect) is its evidence until a run is recorded.
+
+7. **What the split says.** `FoldSplit.derived` answers each derive that lowered, by its planned step and
+   column, and `FoldSplit.describe` says each in a sentence ("step 2 derives the column 'band' in the
+   statement, as a computed column of its select"). The roll-up of the first consumer's shape, a filter,
+   four derives and a grouping on three of them with `Sum` and `CountDistinct`, lowers to one statement with
+   an empty local suffix.
+
+The version: two closed unions gain a case (`Relation.Derive`, `Scalar.Cast`), which is breaking, and 0.1.0
+is tagged, so this is 0.2.0 (`STABILITY.md`). Every emitted fixture is re-stamped with the kit version; the
+69 existing fixtures keep their content otherwise.
+
 ## 2026-11-11 — D14: published from the line its first consumers build on (Phase 32)
 
 This repository has its first consumers, and both restore from nuget.org alone. The decisions that make it
@@ -688,11 +793,13 @@ dialect does is still done per consuming engine. Five rulings, each with what wo
    | `Join` (form) | `JoinRel`, the condition an `and` of `equal`s | mapped | `equal` over a null key is null, so it matches nothing |
    | `Aggregate` (form) | `AggregateRel`; `NonEmpty` as a `count()` measure, a filter on it, then a projection | mapped | the D4.5 pin, spelled as relations |
    | `Ordered` | `SortRel` with `*_NULLS_LAST`, then `FetchRel` | mapped | nulls last is native to the format |
+   | `Derive` | `ProjectRel` whose expressions are the computed columns | mapped | added 2026-11-12 (D15): the expressions are the rows below |
    | `Not` | `not` | mapped | Kleene |
    | `IsNull` | `is_null` | mapped | |
    | `Coalesce` | `coalesce` | mapped | the format wants at least two arguments; one argument is itself |
    | `Case` | `IfThen` | mapped | an untaken branch cannot raise, as in the reference |
    | `InList` | `SingularOrList` | mapped | defined as a disjunction of `equal`s, which is three-valued membership |
+   | `Cast` | `Cast`, `failure_behavior: THROW_EXCEPTION` | pinned | added 2026-11-12 (D15): the int-to-fp64 cast the provider admits is exact, but the format leaves an int-to-boolean and a boolean-to-int cast's meaning to the consumer |
    | `Add` | `add` | pinned | a decimal result is `DECIMAL<P,S>`, capped at 38 digits with a scale-reduction rule, where the reference is exact and unbounded; int overflow is the `overflow: ERROR` option, which the consumer does not read |
    | `Sub` | `subtract` | pinned | as `Add` |
    | `Mul` | `multiply` | pinned | as `Add` |
@@ -761,7 +868,10 @@ dialect does is still done per consuming engine. Five rulings, each with what wo
    `Log10`, each pinned (rows above), so functions are now 6 of 18 (11 pinned, 1 unmappable) and the subset
    34 of 62 mapped (54.8%), 27 pinned and 1 unmappable. Four pinned rows only move the decision further
    toward decline; it stands. Both dialects refuse the four by name until a pinned conformance fixture
-   shows an engine agrees. No parameter reaches that consumer as a parameter. The suite holds this
+   shows an engine agrees. No parameter reaches that consumer as a parameter. *Amended 2026-11-12 (D15):* the
+   statement gained the `Derive` relation form, mapped, and the `Cast` expression form, pinned, so relation
+   forms are 7 of 7 and expression forms 5 of 6, and the subset 35 of 64 mapped (54.7%), 28 pinned and 1
+   unmappable. The decision stands. The suite holds this
    table to the algebra: `SubstraitSurveyTests` goes red when the transform algebra gains a function,
    operator, aggregate, join kind or column type this table does not classify, and when the counts above no
    longer match the table's rows.
@@ -1002,7 +1112,8 @@ each with what would reopen it.
    - **`Derive`, `Window`, `Distinct`, `Unpivot`, `Union`, `Intersect`, `Except` do not lower.** `Derive`:
      20 lines, "a derived column's type over no rows or only nulls" (`probe-derived-type-empty`, `gen-1008`,
      F2); compute's D5 (0.38.1) now types a decided derive statically, which removes most of that class.
-     *Reopen* for `Derive` on that evidence. `Window`: the recipe did not lower it (`top-lines-per-category`
+     *Reopen* for `Derive` on that evidence (*reopened 2026-11-12 by D15: a derive whose type the schema
+     decides lowers*). `Window`: the recipe did not lower it (`top-lines-per-category`
      stops before it, section 8), and its frame is order-sensitive. `Distinct`: its identity is the
      canonical token (`Int 1` is not `Float 1.0`, NaN is one value), which SQL's does not share; not
      measured. `Unpivot` and the set operations grow or combine rows and were not lowered by the recipe.
@@ -1017,7 +1128,8 @@ each with what would reopen it.
      pipelines at an aggregate); `First` and `Last` read row order; `StdDev` is the population deviation here
      and engines differ on which they compute (not measured).
    - **`Cast` does not lower**: "type affinity (the engine coerces where the reference refuses)", 12 lines
-     (`probe-type-affinity`, `gen-1011`), and 4 pipelines stopped at a cast or a clock.
+     (`probe-type-affinity`, `gen-1011`), and 4 pipelines stopped at a cast or a clock. *Narrowed
+     2026-11-12 by D15.2: three conversions and the casts that change nothing now lower.*
    - **`Lower` and `Upper` do not lower**: "case folding beyond ASCII", 3 lines (`probe-case-folding`,
      `gen-1147`, `gen-1260`). **`Length` does not lower**: "string length unit", 1 line
      (`probe-length-unit`).

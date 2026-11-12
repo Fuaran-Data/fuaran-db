@@ -518,9 +518,9 @@ let tests =
                       | Some(Refusal.ConstructExcluded(_, r)) when r = c -> ()
                       | other -> failtestf "%s: expected the boundary at %A, got %A" f.Id c other
 
-          testCase "the subset lowers: no fixture of the subset stops at a dialect refusal"
+          testCase "the subset lowers: no fixture of the subset or the derives stops at a dialect refusal"
           <| fun _ ->
-              for f in Fixtures.subset do
+              for f in Fixtures.subset @ Fixtures.derives do
                   match boundaryOf SqlServer.dialect f with
                   | Some(Refusal.DialectRefuses _ as r) -> failtestf "%s stopped at %A" f.Id r
                   | _ -> ()

@@ -587,12 +587,27 @@ let tests =
                       | Some(Refusal.ConstructExcluded(_, r)) when r = c -> ()
                       | other -> failtestf "%s: expected the boundary at %A, got %A" f.Id c other
 
-          testCase "the subset lowers: no fixture of the subset stops at a dialect refusal"
+          testCase "the subset lowers: no fixture of the subset or the derives stops at a dialect refusal"
           <| fun _ ->
-              for f in Fixtures.subset do
+              for f in Fixtures.subset @ Fixtures.derives do
                   match SqlServerTests.boundaryOf PostgreSql.dialect f with
                   | Some(Refusal.DialectRefuses _ as r) -> failtestf "%s stopped at %A" f.Id r
                   | _ -> ()
+
+          testCase "every derive fixture lowers up to its closing limit, through both dialects"
+          <| fun _ ->
+              // The closing `Limit` has no sort before it, so it is the boundary; everything before it,
+              // the derives and the groupings keyed by them included, is in the statement (D15). The one
+              // exception is the derive whose arms the exact typer keeps apart: its cells decide its
+              // type, so it places the boundary with the refusal every derive had before D15.
+              for dialect in [ SqlServer.dialect; PostgreSql.dialect ] do
+                  for f in Fixtures.derives do
+                      match f.Id, SqlServerTests.boundaryOf dialect f with
+                      | "derive-coalesce-mixed", Some(Refusal.VerbNotLowered(1, "derive")) -> ()
+                      | "derive-coalesce-mixed", other ->
+                          failtestf "derive-coalesce-mixed through %s: the boundary is %A" dialect.Name other
+                      | _, Some(Refusal.UnorderedLimit _) -> ()
+                      | _, other -> failtestf "%s through %s: the boundary is %A" f.Id dialect.Name other
 
           testCase "the kit agrees with the reference over the in-memory interpreter, through the PostgreSQL dialect"
           <| fun _ ->

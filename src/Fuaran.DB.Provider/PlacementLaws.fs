@@ -226,8 +226,30 @@ module PlacementLaws =
           page (Slot.Param "p_bad") Asc (Slot.Lit 2) (Slot.Lit 0)
           [ Sort [ Slot.Lit "id", Asc ] ]
           [ Limit(Slot.Lit 2, Slot.Lit 0) ]
-          // verbs outside the subset
+          // derives that lower: a decided type, a total expression in the declared subset
+          [ Derive("req_band", Case([ Binary(Gt, Col "id", Lit(Int 2)), Lit(Str "zq-high") ], Lit(Str "zq-low"))) ]
+          [ Derive("req_w", Coalesce [ Cast(FloatType, Col "fk"); Lit(Float 0.5) ]) ]
+          [ Derive("req_f", Cast(FloatType, Col "fk")) ]
+          [ Derive("s", Coalesce [ Col "s"; Lit(Str "zq-none") ]) ]
+          // groupings keyed by a derived column, and a sum of one
+          [ Derive("req_k", Coalesce [ Col "s"; Lit(Str "zq-none") ])
+            GroupBy([ "req_k" ], [ agg "req_n" Count "id"; agg "req_u" CountDistinct "fk" ]) ]
+          [ Derive(
+                "req_tier",
+                Case(
+                    [ Binary(Ge, Col "fk", Lit(Int 3)), Lit(Str "zq-hi")
+                      Binary(Ge, Col "fk", Lit(Int 2)), Lit(Str "zq-mid") ],
+                    Lit Null
+                )
+            )
+            GroupBy([ "req_tier" ], [ agg "req_total" Sum "amt"; agg "req_ids" CountDistinct "id" ]) ]
+          [ Derive("req_hit", Case([ Col "b", Lit(Int 1) ], Lit(Int 0)))
+            GroupBy([ "s" ], [ agg "req_hits" Sum "req_hit" ]) ]
+          // derives that place the boundary: one the reference can refuse, one whose type the cells decide
           [ Derive("req_next", Binary(Add, Col "id", Lit(Int 1))) ]
+          [ Derive("req_mixed", Case([ Col "b", Lit(Int 1) ], Lit(Str "zq-one"))) ]
+          [ Derive("req_w", Coalesce [ Col "fk"; Lit(Float 0.5) ]) ]
+          // verbs outside the subset
           [ Pivot
                 { Index = [ "b" ]
                   On = "s"
@@ -429,6 +451,7 @@ module PlacementLaws =
             | Relation.Scan _ -> own
             | Relation.Where(input, _)
             | Relation.Select(input, _)
+            | Relation.Derive(input, _)
             | Relation.Aggregate(input, _, _, _)
             | Relation.Ordered(input, _, _, _) -> own @ outputNames input
             | Relation.Join(left, right, _, _, _) -> own @ outputNames left @ outputNames right
@@ -476,10 +499,66 @@ module PlacementLaws =
         | Relation.Scan _ -> []
         | Relation.Where(input, _) -> "filter" :: verbsOf input
         | Relation.Select(input, _) -> "project" :: verbsOf input
+        | Relation.Derive(input, _) -> "derive" :: verbsOf input
         | Relation.Join(left, right, kind, _, _) -> sprintf "join %A" kind :: (verbsOf left @ verbsOf right)
         | Relation.Aggregate(input, keys, _, _) ->
             (if List.isEmpty keys then "keyless groupBy" else "groupBy") :: verbsOf input
         | Relation.Ordered(input, _, _, _) -> "sort-limit page" :: verbsOf input
+
+    /// The aliases of a relation's columns whose values a lowered derive computed, followed through
+    /// selects, joins and grouping keys.
+    let rec private computed (r: Relation) : Set<string> =
+        match r with
+        | Relation.Scan _ -> Set.empty
+        | Relation.Where(input, _)
+        | Relation.Ordered(input, _, _, _) -> computed input
+        | Relation.Select(input, columns) ->
+            let c = computed input
+
+            columns
+            |> List.filter (fun (a, _) -> Set.contains a c)
+            |> List.map (fun (_, o) -> o.Alias)
+            |> Set.ofList
+        | Relation.Derive(input, columns) ->
+            let c = computed input
+
+            columns
+            |> List.filter (fun (s, _) ->
+                match s with
+                | Scalar.Column a -> Set.contains a c
+                | _ -> true)
+            |> List.map (fun (_, o) -> o.Alias)
+            |> Set.ofList
+        | Relation.Join(left, right, _, _, columns) ->
+            let c = Set.union (computed left) (computed right)
+
+            columns
+            |> List.filter (fun (p, _) ->
+                match p with
+                | Pick.Left a
+                | Pick.Right a -> Set.contains a c)
+            |> List.map (fun (_, o) -> o.Alias)
+            |> Set.ofList
+        | Relation.Aggregate(input, keys, _, _) ->
+            let c = computed input
+
+            keys
+            |> List.filter (fun (a, _) -> Set.contains a c)
+            |> List.map (fun (_, o) -> o.Alias)
+            |> Set.ofList
+
+    /// Does the statement group by a key a lowered derive computed?
+    let rec private groupsByDerivedKey (r: Relation) : bool =
+        match r with
+        | Relation.Scan _ -> false
+        | Relation.Aggregate(input, keys, _, _) ->
+            let c = computed input
+            keys |> List.exists (fun (a, _) -> Set.contains a c) || groupsByDerivedKey input
+        | Relation.Where(input, _)
+        | Relation.Select(input, _)
+        | Relation.Derive(input, _)
+        | Relation.Ordered(input, _, _, _) -> groupsByDerivedKey input
+        | Relation.Join(left, right, _, _, _) -> groupsByDerivedKey left || groupsByDerivedKey right
 
     /// The laws, over `iterations` cases drawn from `seed`, with `dialect` lowering and `execute`
     /// running its statements.
@@ -500,6 +579,8 @@ module PlacementLaws =
                 slot.Value <- Some text
 
         let parityR: string option ref = ref None
+        let derivedKeyR: string option ref = ref None
+        let derivedKeys = System.Collections.Generic.Dictionary<string, int>()
         let requestR: string option ref = ref None
         let coherentR: string option ref = ref None
         let purityR: string option ref = ref None
@@ -610,6 +691,19 @@ module PlacementLaws =
                         | Error a, Error b -> a = b
                         | _ -> false
 
+                    if groupsByDerivedKey lowered.Statement.Form then
+                        bump derivedKeys "groupBy over a derived key"
+
+                        if not agree then
+                            note
+                                derivedKeyR
+                                (sprintf
+                                    "%s: the statement grouping by a derived key answered %A; the reference, grouping by the expression, %A (pipeline=%A)"
+                                    at
+                                    split'
+                                    whole
+                                    c.Pipeline)
+
                     if not agree then
                         note
                             parityR
@@ -654,6 +748,11 @@ module PlacementLaws =
               parityR.Value
           LawResult.subject
               family
+              "a grouping keyed by a column a lowered derive computed equals the reference grouping by that expression"
+              iterations
+              derivedKeyR.Value
+          LawResult.subject
+              family
               "every statement is built from the model and its parameters alone: no request text"
               iterations
               requestR.Value
@@ -687,7 +786,13 @@ module PlacementLaws =
                     "join Anti"
                     "groupBy"
                     "keyless groupBy"
-                    "sort-limit page" ])
+                    "sort-limit page"
+                    "derive" ])
+          SampleAdequacy.reached
+              family
+              "derived grouping key"
+              seed
+              (counts derivedKeys [ "groupBy over a derived key" ])
           SampleAdequacy.reached
               family
               "side of the split"

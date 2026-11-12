@@ -20,8 +20,9 @@ type Refusal =
     | UnknownSource of table: string * tables: string list
     /// The rows at this step carry no columns, which no statement can select.
     | EmptyRow of step: int
-    /// A verb outside the declared subset: `derive`, `window`, `unpivot`, `distinct`, `union`,
-    /// `intersect` or `except`.
+    /// A verb outside the declared subset (`window`, `unpivot`, `distinct`, `union`, `intersect`,
+    /// `except`, and the verbs a planned pipeline never carries), or a `derive` whose column's type the
+    /// schema does not decide (DECISIONS.md D15).
     | VerbNotLowered of step: int * verb: string
     /// A pivot, which never lowers: it turns data values into identifiers.
     | PivotNeverLowers of step: int
@@ -158,6 +159,10 @@ module Refusal =
                 (String.concat ", " tables)
         | Refusal.EmptyRow 0 -> "the source table has no columns, and a statement cannot select none"
         | Refusal.EmptyRow s -> sprintf "step %d leaves no columns, and a statement cannot select none" s
+        | Refusal.VerbNotLowered(s, "derive") ->
+            sprintf
+                "step %d is a derive whose column type the schema does not decide, which is outside the declared subset; it runs locally"
+                s
         | Refusal.VerbNotLowered(s, verb) ->
             sprintf "step %d is a %s, which is outside the declared subset; it runs locally" s verb
         | Refusal.PivotNeverLowers s ->

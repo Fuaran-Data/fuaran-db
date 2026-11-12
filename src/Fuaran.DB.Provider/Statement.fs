@@ -36,7 +36,9 @@ type Construct =
     | Join of JoinKind
     /// A parameter of this column type.
     | Parameter of ColumnType
-    /// A cast to this type. Outside the provider's declared subset (DECISIONS.md D4.4).
+    /// A cast to this type. Inside the declared subset only from an operand whose type the schema
+    /// decides, along a pair whose meaning no engine reinterprets (DECISIONS.md D15.2): the dialect is
+    /// asked about each cast it would emit.
     | Cast of ColumnType
     /// An exact rounding (`Quotient`, `Rounded`) under this mode. Outside the declared subset.
     | Rounding of RoundingMode
@@ -67,6 +69,8 @@ type Scalar =
     | Case of cases: (Scalar * Scalar) list * otherwise: Scalar
     /// Three-valued membership in a non-empty list.
     | InList of Scalar * Scalar list
+    /// A conversion of a value to this type, along a pair the declared subset admits (DECISIONS.md D15.2).
+    | Cast of ColumnType * Scalar
 
 /// One column a relation produces: the alias the statement knows it by, and its field: the name the
 /// pipeline knows it by, its type, and the unit, label and description it carries (DECISIONS.md D12).
@@ -114,6 +118,9 @@ type Relation =
     /// One row per distinct key, keys then aggregates. `NonEmpty` drops the one row a keyless
     /// aggregate over no rows answers in SQL, which the reference evaluator does not answer.
     | Aggregate of Relation * keys: (string * Output) list * aggregates: (AggFn * string * Output) list * nonEmpty: bool
+    /// The input's rows with each output computed from them: a column carried through is a
+    /// `Scalar.Column`, a derived one its expression (DECISIONS.md D15). One `SELECT` of expressions.
+    | Derive of Relation * columns: (Scalar * Output) list
     /// The input ordered by the keys — nulls last in either direction, as the reference orders them —
     /// then `offset` rows skipped and `limit` taken, both parameter ordinals.
     | Ordered of Relation * keys: (string * SortDir) list * limit: int * offset: int
@@ -162,6 +169,7 @@ module Relation =
         | Relation.Scan(_, columns) -> columns |> List.map snd
         | Relation.Where(input, _) -> outputs input
         | Relation.Select(_, columns) -> columns |> List.map snd
+        | Relation.Derive(_, columns) -> columns |> List.map snd
         | Relation.Join(_, _, _, _, columns) -> columns |> List.map snd
         | Relation.Aggregate(_, keys, aggregates, _) ->
             (keys |> List.map snd) @ (aggregates |> List.map (fun (_, _, o) -> o))
@@ -173,6 +181,7 @@ module Relation =
         | Relation.Scan(table, columns) -> table :: (columns |> List.map fst)
         | Relation.Where(input, _)
         | Relation.Select(input, _)
+        | Relation.Derive(input, _)
         | Relation.Aggregate(input, _, _, _)
         | Relation.Ordered(input, _, _, _) -> physicalIdentifiers input
         | Relation.Join(left, right, _, _, _) -> physicalIdentifiers left @ physicalIdentifiers right
@@ -185,7 +194,8 @@ module Relation =
         | Scalar.Coalesce args -> args |> List.collect scalarAliases
         | Scalar.Operator(_, a, b) -> scalarAliases a @ scalarAliases b
         | Scalar.Not x
-        | Scalar.IsNull x -> scalarAliases x
+        | Scalar.IsNull x
+        | Scalar.Cast(_, x) -> scalarAliases x
         | Scalar.Case(cases, otherwise) ->
             (cases |> List.collect (fun (w, t) -> scalarAliases w @ scalarAliases t))
             @ scalarAliases otherwise
@@ -200,6 +210,7 @@ module Relation =
             | Relation.Scan _ -> []
             | Relation.Where(input, p) -> aliases input @ scalarAliases p
             | Relation.Select(input, columns) -> aliases input @ (columns |> List.map fst)
+            | Relation.Derive(input, columns) -> aliases input @ (columns |> List.collect (fst >> scalarAliases))
             | Relation.Join(left, right, _, on, columns) ->
                 aliases left
                 @ aliases right
@@ -225,7 +236,8 @@ module Relation =
         | Scalar.Coalesce args -> args |> List.collect scalarParameters
         | Scalar.Operator(_, a, b) -> scalarParameters a @ scalarParameters b
         | Scalar.Not x
-        | Scalar.IsNull x -> scalarParameters x
+        | Scalar.IsNull x
+        | Scalar.Cast(_, x) -> scalarParameters x
         | Scalar.Case(cases, otherwise) ->
             (cases |> List.collect (fun (w, t) -> scalarParameters w @ scalarParameters t))
             @ scalarParameters otherwise
@@ -239,6 +251,8 @@ module Relation =
         | Relation.Where(input, p) -> parameters input @ scalarParameters p
         | Relation.Select(input, _)
         | Relation.Aggregate(input, _, _, _) -> parameters input
+        // The computed columns are rendered before the select they read from.
+        | Relation.Derive(input, columns) -> (columns |> List.collect (fst >> scalarParameters)) @ parameters input
         | Relation.Join(left, right, _, _, _) -> parameters left @ parameters right
         | Relation.Ordered(input, _, limit, offset) -> parameters input @ [ limit; offset ]
 

@@ -108,11 +108,36 @@ module internal Lowering =
     /// Every node of an expression, in preorder.
     let rec private nodes (e: ColExpr) : ColExpr list = e :: (children e |> List.collect nodes)
 
+    /// How a cast lowers (DECISIONS.md D15.2).
+    [<RequireQualifiedAccess>]
+    type private CastForm =
+        /// The operand already has the target type, or is a null the target types: it lowers as the
+        /// operand, read at the target type.
+        | Retyped
+        /// A conversion every dialect is asked about: an int to a float or to a bool, a bool to an int.
+        | Converted
+
+    /// How a cast of `x` to `ty` lowers over the schema, or `None` when it is outside the declared
+    /// subset. Only the pairs whose meaning no engine reinterprets lower: a string's formatting, a
+    /// decimal's scale, a float's truncation and a parsed text are each an engine's own.
+    let private castForm (schema: Schema) (ty: ColumnType) (x: ColExpr) : CastForm option =
+        match x with
+        | Lit Null -> Some CastForm.Retyped
+        | _ ->
+            match DataFrame.typeOf schema x, ty with
+            | Some from, _ when from = ty -> Some CastForm.Retyped
+            | Some IntType, (FloatType | BoolType)
+            | Some BoolType, IntType -> Some CastForm.Converted
+            | _ -> None
+
     /// The construct outside the provider's declared subset an expression node is, if any
-    /// (DECISIONS.md D4.4).
-    let private excluded (e: ColExpr) : Construct option =
+    /// (DECISIONS.md D4.4, D15).
+    let private excluded (schema: Schema) (e: ColExpr) : Construct option =
         match e with
-        | Cast(ty, _) -> Some(Construct.Cast ty)
+        | Cast(ty, x) ->
+            match castForm schema ty x with
+            | Some _ -> None
+            | None -> Some(Construct.Cast ty)
         // A conversion is a cast to float times its factor (Compute D29), so it is a cast here:
         // outside the declared subset, and evaluated locally.
         | Convert _ -> Some(Construct.Cast FloatType)
@@ -141,17 +166,21 @@ module internal Lowering =
         | InList _ -> None
 
     /// The construct a dialect is asked about for an expression node, if any.
-    let private asked (e: ColExpr) : Construct option =
+    let private asked (schema: Schema) (e: ColExpr) : Construct option =
         match e with
         | ApplyFn(f, _) -> Some(Construct.Function f)
         | Binary(op, _, _) -> Some(Construct.Operator op)
+        | Cast(ty, x) ->
+            match castForm schema ty x with
+            | Some CastForm.Converted -> Some(Construct.Cast ty)
+            | Some CastForm.Retyped
+            | None -> None
         | Col _
         | Lit _
         | Param _
         | Now _
         | Not _
         | IsNull _
-        | Cast _
         | Convert _
         | Rounded _
         | Quotient _
@@ -232,8 +261,12 @@ module internal Lowering =
         // the lowering is total on its own.
         | Param n
         | InParam(_, n) -> Error(Refusal.UnboundParam(step, n))
+        | Cast(ty, x) ->
+            match castForm schema ty x with
+            | Some CastForm.Retyped -> go (Some ty) x
+            | Some CastForm.Converted -> go (typeOf x) x |> Result.map (fun lx -> Scalar.Cast(ty, lx))
+            | None -> Error(Refusal.ConstructExcluded(step, Construct.Cast ty))
         | Now g -> Error(Refusal.UnpinnedClock(step, g))
-        | Cast(ty, _) -> Error(Refusal.ConstructExcluded(step, Construct.Cast ty))
         | Convert _ -> Error(Refusal.ConstructExcluded(step, Construct.Cast FloatType))
         | Quotient(_, _, r)
         | Rounded(_, r) -> Error(Refusal.ConstructExcluded(step, Construct.Rounding r.Mode))
@@ -257,40 +290,49 @@ module internal Lowering =
 
         bind, (fun () -> b.Params @ List.ofSeq added)
 
+    /// Why an expression over the relation built so far does not lower, before its type and its
+    /// totality are asked about: a column the rows do not carry, an unpinned clock, an unbound
+    /// parameter, a construct outside the declared subset, or one the dialect refuses.
+    let private expressionRefusal (d: Dialect) (step: int) (cols: Col list) (e: ColExpr) : Refusal option =
+        let schema = schemaOf cols
+        let all = nodes e
+
+        firstError
+            [ fun () ->
+                  Reads.ofExpr e
+                  |> List.tryFind (fun c -> Option.isNone (tryCol c cols))
+                  |> Option.map (fun c -> Refusal.UnknownColumn(step, c, members cols))
+              fun () ->
+                  all
+                  |> List.tryPick (fun n ->
+                      match n with
+                      | Now g -> Some(Refusal.UnpinnedClock(step, g))
+                      | _ -> None)
+              fun () ->
+                  all
+                  |> List.tryPick (fun n ->
+                      match n with
+                      | Param name
+                      | InParam(_, name) -> Some(Refusal.UnboundParam(step, name))
+                      | _ -> None)
+              fun () ->
+                  all
+                  |> List.tryPick (excluded schema)
+                  |> Option.map (fun c -> Refusal.ConstructExcluded(step, c))
+              fun () ->
+                  all
+                  |> List.tryPick (fun n ->
+                      asked schema n
+                      |> Option.bind (fun c ->
+                          d.Refuses c |> Option.map (fun why -> Refusal.DialectRefuses(step, c, why)))) ]
+
     /// A `Filter` over the relation built so far.
     let private filter (d: Dialect) (step: int) (b: Built) (p: ColExpr) : Result<Built, Refusal> =
         let schema = schemaOf b.Columns
-        let all = nodes p
 
         let check =
             firstError
-                [ fun () ->
-                      Reads.ofExpr p
-                      |> List.tryFind (fun c -> Option.isNone (tryCol c b.Columns))
-                      |> Option.map (fun c -> Refusal.UnknownColumn(step, c, members b.Columns))
-                  fun () ->
-                      all
-                      |> List.tryPick (fun n ->
-                          match n with
-                          | Now g -> Some(Refusal.UnpinnedClock(step, g))
-                          | _ -> None)
-                  fun () ->
-                      all
-                      |> List.tryPick (fun n ->
-                          match n with
-                          | Param name
-                          | InParam(_, name) -> Some(Refusal.UnboundParam(step, name))
-                          | _ -> None)
-                  fun () ->
-                      all
-                      |> List.tryPick excluded
-                      |> Option.map (fun c -> Refusal.ConstructExcluded(step, c))
-                  fun () ->
-                      all
-                      |> List.tryPick (fun n ->
-                          asked n
-                          |> Option.bind (fun c ->
-                              d.Refuses c |> Option.map (fun why -> Refusal.DialectRefuses(step, c, why))))
+                [ fun () -> expressionRefusal d step b.Columns p
                   fun () ->
                       if Plan.isTotal schema (Filter p) then
                           None
@@ -313,6 +355,116 @@ module internal Lowering =
                 { b with
                     Relation = Relation.Where(b.Relation, scalar)
                     Params = parameters () })
+
+    let rec private renumberScalar (f: int -> int) (s: Scalar) : Scalar =
+        let go = renumberScalar f
+
+        match s with
+        | Scalar.Column _ -> s
+        | Scalar.Parameter i -> Scalar.Parameter(f i)
+        | Scalar.Function(fn, args) -> Scalar.Function(fn, List.map go args)
+        | Scalar.Operator(op, a, b) -> Scalar.Operator(op, go a, go b)
+        | Scalar.Not x -> Scalar.Not(go x)
+        | Scalar.IsNull x -> Scalar.IsNull(go x)
+        | Scalar.Coalesce xs -> Scalar.Coalesce(List.map go xs)
+        | Scalar.Case(cases, otherwise) -> Scalar.Case(cases |> List.map (fun (w, t) -> go w, go t), go otherwise)
+        | Scalar.InList(x, items) -> Scalar.InList(go x, List.map go items)
+        | Scalar.Cast(ty, x) -> Scalar.Cast(ty, go x)
+
+    /// A relation with every parameter ordinal it references mapped through `f`.
+    let rec private renumber (f: int -> int) (r: Relation) : Relation =
+        match r with
+        | Relation.Scan _ -> r
+        | Relation.Where(input, p) -> Relation.Where(renumber f input, renumberScalar f p)
+        | Relation.Select(input, columns) -> Relation.Select(renumber f input, columns)
+        | Relation.Derive(input, columns) ->
+            Relation.Derive(renumber f input, columns |> List.map (fun (s, o) -> renumberScalar f s, o))
+        | Relation.Join(left, right, kind, on, columns) ->
+            Relation.Join(renumber f left, renumber f right, kind, on, columns)
+        | Relation.Aggregate(input, keys, aggregates, nonEmpty) ->
+            Relation.Aggregate(renumber f input, keys, aggregates, nonEmpty)
+        | Relation.Ordered(input, keys, limit, offset) -> Relation.Ordered(renumber f input, keys, f limit, f offset)
+
+    /// The field a `Derive` of `e` named `name` gives its column over the schema, where the schema
+    /// decides its type: the compute package's own static walk, so the field is the one the reference
+    /// evaluator gives the column, unit included (DECISIONS.md D15.1).
+    let private derivedField (schema: Schema) (name: string) (e: ColExpr) : Field option =
+        SchemaWalk.ofTransform SchemaWalk.noSources (SchemaWalk.ofSchema schema) (Derive(name, e))
+        |> SchemaWalk.columns
+        |> List.tryFind (fun c -> c.Name = name)
+        |> Option.bind ColumnKnowledge.toField
+
+    /// A `Derive` over the relation built so far: one select carrying every column through and
+    /// computing the derived one, in place where the name is already carried, as the reference
+    /// evaluator places it (DECISIONS.md D15).
+    let private derive (d: Dialect) (step: int) (b: Built) (name: string, e: ColExpr) : Result<Built, Refusal> =
+        let schema = schemaOf b.Columns
+        let field = derivedField schema name e
+
+        let check =
+            firstError
+                [ fun () -> expressionRefusal d step b.Columns e
+                  fun () ->
+                      match field with
+                      | Some _ -> None
+                      | None -> Some(Refusal.VerbNotLowered(step, "derive"))
+                  fun () ->
+                      if Plan.isTotal schema (Derive(name, e)) then
+                          None
+                      else
+                          Some(
+                              Refusal.MayRefuse(
+                                  step,
+                                  "the planner's totality verdict does not admit the derived column"
+                              )
+                          ) ]
+
+        match check, field with
+        | Some r, _ -> Error r
+        | None, None -> Error(Refusal.VerbNotLowered(step, "derive"))
+        | None, Some field ->
+            // The computed columns are rendered before the select they read from, so the derive's
+            // parameters take the first ordinals and the input's move up past them.
+            let bind, parameters = binder d step { b with Params = [] }
+
+            lowerExpr step b.Columns bind (Some field.Type) e
+            |> Result.map (fun scalar ->
+                let added = parameters ()
+
+                let derived =
+                    { Output = { Alias = ""; Field = field }
+                      Origin = None }
+
+                let computed =
+                    if b.Columns |> List.exists (fun c -> c.Output.Name = name) then
+                        b.Columns
+                        |> List.map (fun c ->
+                            if c.Output.Name = name then
+                                scalar, derived
+                            else
+                                Scalar.Column c.Output.Alias, c)
+                    else
+                        (b.Columns |> List.map (fun c -> Scalar.Column c.Output.Alias, c))
+                        @ [ scalar, derived ]
+
+                let columns =
+                    computed
+                    |> List.mapi (fun i (s, c) ->
+                        s,
+                        { c with
+                            Output =
+                                { c.Output with
+                                    Alias = mint (b.Next + i) } })
+
+                { b with
+                    Relation =
+                        Relation.Derive(
+                            renumber (fun i -> i + List.length added) b.Relation,
+                            columns |> List.map (fun (s, c) -> s, c.Output)
+                        )
+                    Columns = columns |> List.map snd
+                    Params = added @ b.Params
+                    Next = b.Next + List.length columns })
 
     /// A `Project` over the relation built so far.
     let private project (step: int) (b: Built) (pairs: (string * string) list) : Result<Built, Refusal> =
@@ -670,7 +822,7 @@ module internal Lowering =
                     | _ -> b, lowered, Some(Refusal.UnpairedSort step)
                 | Limit _ -> b, lowered, Some(Refusal.UnorderedLimit step)
                 | Pivot _ -> b, lowered, Some(Refusal.PivotNeverLowers step)
-                | Derive _ -> b, lowered, Some(Refusal.VerbNotLowered(step, "derive"))
+                | Derive(name, e) -> next (derive d step b (name, e)) rest
                 | Window _ -> b, lowered, Some(Refusal.VerbNotLowered(step, "window"))
                 | Unpivot _ -> b, lowered, Some(Refusal.VerbNotLowered(step, "unpivot"))
                 | Distinct -> b, lowered, Some(Refusal.VerbNotLowered(step, "distinct"))

@@ -1,9 +1,10 @@
 # Fuaran.DB — API stability
 
-**Status:** pre-release. The package version is single-sourced from `<Version>` in
-`Directory.Build.props` (which `pack.ps1` reads); this document does not restate the number. Nothing has been packed
-for release or tagged, so the standing version is a **draft slot**: an additive change rides it, and a
-change of a higher class advances it.
+**Status:** pre-release, on the `0.x` line. The package version is single-sourced from `<Version>` in
+`Directory.Build.props` (which `pack.ps1` reads). 0.1.0 is tagged and published on nuget.org, so it names one
+contract and is never repacked. The standing version is the one headed DRAFT below: untagged and pinned by
+no public consumer, it is a **draft slot**, which an additive change rides and a change of a higher class
+advances.
 
 ## Versioning policy
 
@@ -81,7 +82,37 @@ public feed, names one contract and is never repacked: a change after that point
 
 ## Versions
 
-### 0.1.0 — DRAFT
+### 0.2.0 — DRAFT
+
+A statically typed `Derive` lowers, and so does a grouping keyed by it (Phase 33, DECISIONS.md D15). 0.1.0 is
+tagged, so the change cannot ride it, and two closed unions gain a case, so on the `0.x` line it advances the
+minor. Built against the same line as 0.1.0, `Fuaran.Core.*` 0.42.0 and `Fuaran.Compute.DataFrame` 0.44.0.
+
+- **Breaking — `Relation` gains `Derive`**, a select of computed columns (D15.3), and **`Scalar` gains
+  `Cast`**, a conversion along a pair the declared subset admits (D15.2). A closed union gaining a case
+  breaks every exhaustive match a consumer has written, a dialect's included if it matches the form.
+  `Render.text` renders both; no field is added to the `Dialect` record, and a dialect renders a cast
+  through `RenderFunction (Construct.Cast ty)`, which it was already total over.
+- **The posture, widened and decided (D15)**: the declared subset lowers more. A `Derive` whose column's type
+  the schema decides, whose expression is in the subset and which the totality verdict admits is part of
+  the statement, and so is a grouping keyed by its column. `Cast` lowers to the operand's own type, from a
+  null literal, and from `int` to `float` or `bool` and `bool` to `int`, in a filter as in a derive. A
+  derive whose type is undecided places the boundary with the refusal it had, `VerbNotLowered`.
+- **The posture, unchanged where it was refused**: every construct D4.4 excludes is still excluded, with its
+  refusal name, and the rest of the casts stay local as `ConstructExcluded(Cast ty)`.
+- **Both dialects' refusals are narrowed**: `refuses (Construct.Cast ty)` admits `int`, `float` and `bool`
+  and refuses every other target by name, where it refused every cast. A dialect that renders through
+  `render` spells `CAST(x AS <engine type>)`. The type maps are unchanged.
+- **Additive — `FoldSplit.derived`**, each lowered derive's planned step and column; `FoldSplit.describe`
+  says each in a sentence, and `Refusal.describe` names the undecided type for a derive.
+- **Additive — the placement laws**: a law that a grouping keyed by a derived column equals the reference
+  grouping by that expression, with its own sample adequacy; the lowered-verb adequacy now requires a
+  `derive`. `PlacementLaws.laws` answers two more `LawResult`s, so a consumer reading results by position
+  should read them by law.
+- **Additive — the conformance set**: `Fixtures.derives`, 22 fixtures, take the set to 91. Every existing
+  fixture keeps its content; every emitted file is re-stamped with the kit version, 0.2.0.
+
+### 0.1.0
 
 The first surface (Phase 1899): the dataset model and its op vocabulary, the model rules, the pipeline
 check, seeding and drift, the wire codec with its corpus, and the AI-tools surface. Built against

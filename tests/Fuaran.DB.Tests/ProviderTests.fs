@@ -131,6 +131,45 @@ let tests =
 
               Expect.isFalse (results |> List.head |> _.Passed) "the missing HAVING is caught"
 
+          testCase "the derived-key law goes red over an engine that computes a derived column wrongly (its falsifier)"
+          <| fun _ ->
+              // An engine whose CASE takes the branch whose condition fails, and whose COALESCE reads its
+              // arms from the last: each computed column keeps its type and changes its values.
+              let rec wrong (s: Scalar) : Scalar =
+                  match s with
+                  | Scalar.Case(cases, otherwise) ->
+                      Scalar.Case(cases |> List.map (fun (w, t) -> Scalar.Not w, t), otherwise)
+                  | Scalar.Coalesce xs -> Scalar.Coalesce(List.rev xs)
+                  | other -> other
+
+              let rec skew (r: Relation) : Relation =
+                  match r with
+                  | Relation.Derive(input, columns) ->
+                      Relation.Derive(skew input, columns |> List.map (fun (s, o) -> wrong s, o))
+                  | Relation.Where(input, p) -> Relation.Where(skew input, p)
+                  | Relation.Select(input, columns) -> Relation.Select(skew input, columns)
+                  | Relation.Aggregate(input, keys, aggregates, nonEmpty) ->
+                      Relation.Aggregate(skew input, keys, aggregates, nonEmpty)
+                  | Relation.Ordered(input, keys, limit, offset) -> Relation.Ordered(skew input, keys, limit, offset)
+                  | Relation.Join(left, right, kind, on, columns) ->
+                      Relation.Join(skew left, skew right, kind, on, columns)
+                  | Relation.Scan _ -> r
+
+              let skewed: PlacementLaws.Executor =
+                  fun statement tables ->
+                      ReferenceDialect.execute
+                          { statement with
+                              Form = skew statement.Form }
+                          tables
+
+              let results = PlacementLaws.laws d skewed seed iterations
+
+              let law =
+                  results
+                  |> List.find (fun r -> r.Law.StartsWith "a grouping keyed by a column a lowered derive computed")
+
+              Expect.isFalse law.Passed "a derived key computed wrongly is caught"
+
           testCase "a pipeline carrying a pivot lowers its prefix, leaves the pivot local, and explain says so"
           <| fun _ ->
               let pipeline =
@@ -168,6 +207,107 @@ let tests =
               Expect.isNonEmpty l.Split.Plan.Applied "the planner rewrote"
               Expect.equal l.Split.Lowered 3 "every planned step lowers"
               Expect.isNone l.Split.Boundary "nothing runs locally"
+
+          testCase "a roll-up keyed by derived columns lowers to one statement, and explain names each derive"
+          <| fun _ ->
+              // The first consumer's shape (DECISIONS.md D15): a filter, a band, a flag read as a type,
+              // a default, then a grouping on the three with a sum and a distinct count.
+              let pipeline =
+                  [ Filter(Binary(Gt, Col "id", Lit(Int 0)))
+                    Derive(
+                        "band",
+                        Case(
+                            [ Binary(Ge, Col "fk", Lit(Int 3)), Lit(Str "zq-high")
+                              Binary(Ge, Col "fk", Lit(Int 2)), Lit(Str "zq-mid") ],
+                            Lit(Str "zq-low")
+                        )
+                    )
+                    Derive("shopper", Case([ Col "b", Lit(Str "zq-new") ], Lit(Str "zq-returning")))
+                    Derive("channel", Coalesce [ Col "s"; Lit(Str "zq-unknown") ])
+                    Derive("stated", Case([ IsNull(Col "amt"), Lit(Int 0) ], Lit(Int 1)))
+                    GroupBy(
+                        [ "band"; "shopper"; "channel" ],
+                        [ { Name = "spend"; Fn = Sum; Of = "amt" }
+                          { Name = "orders"
+                            Fn = CountDistinct
+                            Of = "id" }
+                          { Name = "stating"
+                            Fn = Sum
+                            Of = "stated" } ]
+                    ) ]
+
+              let l = lower pipeline Bindings.none
+              Expect.isNone l.Split.Boundary "every planned step lowers"
+              Expect.isEmpty l.Suffix "nothing runs locally"
+
+              Expect.equal
+                  (FoldSplit.derived l.Split |> List.map snd)
+                  [ "band"; "shopper"; "channel"; "stated" ]
+                  "explain reports each derive that lowered"
+
+              let said = FoldSplit.describe l.Split |> String.concat "\n"
+              Expect.stringContains said "derives the column 'band' in the statement" "describe says it"
+              Expect.isFalse (l.Statement.Text.Contains "zq-") "every literal is a parameter"
+              Expect.isNone (textOffence model l.Statement) "no request text"
+
+              Expect.equal
+                  (Relation.parameters l.Statement.Form)
+                  (List.init (List.length l.Statement.Parameters) id)
+                  "the parameters are referenced once each, in the order the text renders them"
+
+              Expect.equal
+                  (l.Statement.Columns |> List.map (fun o -> o.Name, o.Type))
+                  [ "band", StringType
+                    "shopper", StringType
+                    "channel", StringType
+                    "spend", DecimalType
+                    "orders", IntType
+                    "stating", IntType ]
+                  "the result schema, in the pipeline's names"
+
+          testCase "a derive whose type the schema does not decide places the boundary as it did before"
+          <| fun _ ->
+              let pipeline =
+                  [ Filter(Binary(Gt, Col "id", Lit(Int 0)))
+                    Derive("mixed", Case([ Col "b", Lit(Int 1) ], Lit(Str "zq-one"))) ]
+
+              let l = lower pipeline Bindings.none
+              let at = List.length l.Split.Plan.Planned
+              Expect.equal l.Split.Boundary (Some(Refusal.VerbNotLowered(at, "derive"))) "the refusal it had"
+              Expect.isEmpty (FoldSplit.derived l.Split) "no derive lowered"
+
+              Expect.stringContains
+                  (FoldSplit.describe l.Split |> String.concat "\n")
+                  "a derive whose column type the schema does not decide"
+                  "describe names the rule"
+
+          testCase "a cast lowers only along the pairs the subset admits, and a derive in place keeps its position"
+          <| fun _ ->
+              let boundary (e: ColExpr) =
+                  (lower [ Derive("x", e) ] Bindings.none).Split.Boundary
+
+              Expect.isNone (boundary (Cast(FloatType, Col "fk"))) "an int to a float lowers"
+              Expect.isNone (boundary (Cast(IntType, Col "b"))) "a bool to an int lowers"
+              Expect.isNone (boundary (Cast(StringType, Lit Null))) "a typed null lowers as a parameter"
+              Expect.isNone (boundary (Cast(IntType, Col "id"))) "a cast to the operand's own type lowers"
+
+              Expect.equal
+                  (boundary (Cast(StringType, Col "fk")))
+                  (Some(Refusal.ConstructExcluded(1, Construct.Cast StringType)))
+                  "a number formatted as text stays local"
+
+              Expect.equal
+                  (boundary (Cast(IntType, Col "amt")))
+                  (Some(Refusal.ConstructExcluded(1, Construct.Cast IntType)))
+                  "a decimal truncated to an int stays local"
+
+              let l =
+                  lower [ Derive("s", Coalesce [ Col "s"; Lit(Str "zq-none") ]) ] Bindings.none
+
+              Expect.equal
+                  (l.Statement.Columns |> List.map _.Name)
+                  [ "id"; "fk"; "amt"; "s"; "b"; "d"; "big" ]
+                  "a derive over a carried name replaces it in place"
 
           testCase "a clock lowers only when pinned, and then as a parameter"
           <| fun _ ->
