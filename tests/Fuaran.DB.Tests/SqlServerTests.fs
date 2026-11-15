@@ -52,7 +52,7 @@ let constructs: Construct list =
 
 /// Where the boundary falls for a fixture through a dialect.
 let boundaryOf (dialect: Dialect) (f: Fixture) : Refusal option =
-    match Policy.admit Fixtures.model Kit.subject (Ref f.Source) f.Pipeline with
+    match Policy.admitWith Fixtures.model Kit.subject f.Operands (Ref f.Source) f.Pipeline with
     | Error r -> failtestf "%s: the policy refused it: %A" f.Id r
     | Ok admitted ->
         match FoldSplit.explain admitted dialect f.Bindings with
@@ -62,7 +62,7 @@ let boundaryOf (dialect: Dialect) (f: Fixture) : Refusal option =
 let textOf (dialect: Dialect) (id: string) : string =
     let f = Fixtures.all |> List.find (fun f -> f.Id = id)
 
-    match Policy.admit Fixtures.model Kit.subject (Ref f.Source) f.Pipeline with
+    match Policy.admitWith Fixtures.model Kit.subject f.Operands (Ref f.Source) f.Pipeline with
     | Error r -> failtestf "%A" r
     | Ok admitted ->
         match FoldSplit.lower admitted dialect f.Bindings with
@@ -524,6 +524,20 @@ let tests =
                   match boundaryOf SqlServer.dialect f with
                   | Some(Refusal.DialectRefuses _ as r) -> failtestf "%s stopped at %A" f.Id r
                   | _ -> ()
+
+          testCase
+              "the grouped-operand and count fixtures lower in full up to the bounding limit, the operand inside the join, in both dialects"
+          <| fun _ ->
+              // Every pipeline ends in the bounding limit the policy requires, which no sort orders, so
+              // the boundary falls there and nowhere earlier: the engine run is evidence about the join
+              // and the count, not about a local suffix (DECISIONS.md D16).
+              for dialect in [ SqlServer.dialect; PostgreSql.dialect ] do
+                  for f in Fixtures.grouped @ Fixtures.counts do
+                      match boundaryOf dialect f with
+                      | Some(Refusal.OperandNotLowered(1, _, why)) when f.Id = "operand-grouped-wide" ->
+                          Expect.stringContains why "could fan out" "the wide operand is named as such"
+                      | Some(Refusal.UnorderedLimit _) -> ()
+                      | other -> failtestf "%s through %s: the boundary is %A" f.Id dialect.Name other
 
           testCase "the kit agrees with the reference over the in-memory interpreter, through the reference dialect"
           <| fun _ ->

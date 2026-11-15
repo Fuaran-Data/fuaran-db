@@ -72,6 +72,30 @@ form in a computed column, against the reference:
 The provider admits only those three cast pairs, a cast to the operand's own type and a cast of a null;
 the dialect's `Cast` refusals name the rest, should the provider's subset widen.
 
+### A join to a grouped operand
+
+A join whose right side is a grouped operand (`DECISIONS.md` D16) is a join to a derived table, the operand's
+own select grouped on the join's keys, spelled by the renderer as any other right side. Its parameters follow
+the left side's. Nothing in the dialect changes for it: every construct inside the operand is asked about
+exactly as it is in the pipeline.
+
+### `Count` against the reference
+
+`COUNT(x)` counts the present values of `x` and answers `int`, which is the reference's `Count`; nothing is
+spelled differently and nothing is pinned. Each case has a fixture, and each agreed on the engine:
+
+| Case | Fixture | Answer |
+|---|---|---|
+| A group whose values are all null | `count-all-null-group` | 0 |
+| A group of present and null values | `count-mixed-group` | the present values |
+| No rows, with a key | `count-empty-keyed` | no groups |
+| No rows, with no key | `count-empty-keyless` | no row (`HAVING COUNT(*) > 0`, D4.5) |
+| Nulls in a grouping key | `count-null-key` | one group for the null key |
+| The columns a left join leaves null | `count-after-left-join` | 0 for the unmatched row |
+| A grouped operand's count after a left join | `count-operand-after-left-join` | null for the unmatched row, skipped by a count over it |
+| Rows beside values | `count-rows-and-values` | a count of a derived constant is the rows |
+| A distinct count past a null | `count-distinct-null` | the null skipped |
+
 ## Every refusal it declares
 
 Each places the fold boundary at the step that uses it, and the step runs locally in the reference
@@ -125,3 +149,8 @@ reports the leg as Pending when it does not.
 17.0.4025.3 (Express Edition, 64-bit), collation `SQL_Latin1_General_CP1_CI_AS`: of 91 fixtures, 89 agreed,
 2 differed as pinned (the collation pair) and 0 differed unexpectedly. Every derive fixture agreed on the
 engine, the first consumer's roll-up among them.
+
+**The recorded run with grouped operands and the count fixtures** (`DECISIONS.md` D16) was made on the same
+engine and collation: of 107 fixtures, 105 agreed, 2 differed as pinned (the collation pair) and 0 differed
+unexpectedly. All seven grouped-operand fixtures and all nine count fixtures agreed, the first consumer's
+attribution shape (`operand-attribution-rollup`) among them.

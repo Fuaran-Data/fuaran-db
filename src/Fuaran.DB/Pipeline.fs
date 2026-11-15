@@ -29,6 +29,84 @@ type PipelineRefusal =
     /// set-operation column) and `left` / `right` the two units, as their canonical text. A column
     /// the model states no unit for is unconstrained and never refused.
     | UnitMismatch of step: int * at: string * left: string * right: string
+    /// A grouped operand's own pipeline is refused against the model (DECISIONS.md D16): `refusal`
+    /// counts its steps within the operand, from 1.
+    | Operand of operand: string * refusal: PipelineRefusal
+    /// A grouped operand is named where it may not be: by a step other than a join, by a name the
+    /// model's tables or another operand already hold, or over a pipeline that brings in a second
+    /// source. `reason` says which.
+    | OperandMisused of step: int * operand: string * reason: string
+
+/// A grouped operand (DECISIONS.md D16): a named sub-pipeline over one modelled table, which a `Join`
+/// brings in as its right side by naming it, `Join(Ref name, on, kind)`. The transform algebra's
+/// sources are a table or a name, so a sub-pipeline travels beside the pipeline that joins it, as
+/// the reference evaluator's resolver would answer the name: by evaluating the operand's pipeline.
+type Operand =
+    {
+        /// The name a join gives it. No table of the model may hold it.
+        Name: string
+        /// The model name of the one table it reads.
+        Table: string
+        /// Its pipeline over that table. It brings in no other source; it lowers with the join that
+        /// names it when it ends in a grouping on the joined relation's keys.
+        Pipeline: Transform list
+    }
+
+/// The grouped operands a pipeline joins.
+[<RequireQualifiedAccess>]
+module Operand =
+
+    /// The operand `name` names, if any.
+    let tryFind (name: string) (operands: Operand list) : Operand option =
+        operands |> List.tryFind (fun o -> o.Name = name)
+
+    /// `resolve` with every operand's name answered by the reference evaluator over the operand's
+    /// pipeline as written, its table read through `resolve`, under the scalar bindings `env`. This
+    /// is what an operand MEANS: a join to it is the reference's join to that table.
+    let resolver
+        (env: Map<string, Cell>)
+        (operands: Operand list)
+        (resolve: string -> Result<Table, EvalError>)
+        : string -> Result<Table, EvalError> =
+        fun name ->
+            match tryFind name operands with
+            | Some o ->
+                resolve o.Table
+                |> Result.bind (DataFrame.evalPipelineWithInEnvAsWritten resolve env o.Pipeline)
+            | None -> resolve name
+
+    /// The model column each output name of an operand's pipeline carries unchanged from its table,
+    /// by model column name: followed through a projection's renames and a grouping's keys, where a
+    /// derived, aggregated or windowed column carries none (DECISIONS.md D4.3's provenance, over a
+    /// sub-pipeline).
+    let provenance (columns: string list) (pipeline: Transform list) : Map<string, string> =
+        let step (m: Map<string, string>) (t: Transform) =
+            match t with
+            | Filter _
+            | Sort _
+            | Limit _
+            | Distinct
+            | Define _ -> m
+            | Project pairs ->
+                pairs
+                |> List.choose (fun (src, out) -> Map.tryFind src m |> Option.map (fun c -> out, c))
+                |> Map.ofList
+            | Derive(name, _) -> Map.remove name m
+            | Window spec -> Map.remove spec.As m
+            | GroupBy(keys, _) ->
+                keys
+                |> List.choose (fun k -> Map.tryFind k m |> Option.map (fun c -> k, c))
+                |> Map.ofList
+            | Join _
+            | Union _
+            | Intersect _
+            | Except _
+            | Pivot _
+            | Unpivot _
+            | Fit _
+            | Predict _ -> Map.empty
+
+        pipeline |> List.fold step (columns |> List.map (fun c -> c, c) |> Map.ofList)
 
 /// The check of a transform pipeline against a dataset model
 /// (`validator:Fuaran.DB.PipelineAgainstModel`). Default-deny: a table, column or join the model
@@ -39,8 +117,11 @@ module PipelineCheck =
     let private sourceStep = 0
 
     /// A refusal as one sentence.
-    let describe (r: PipelineRefusal) : string =
+    let rec describe (r: PipelineRefusal) : string =
         match r with
+        | PipelineRefusal.Operand(o, inner) -> sprintf "in the grouped operand '%s', %s" o (describe inner)
+        | PipelineRefusal.OperandMisused(s, o, reason) ->
+            sprintf "step %d names the grouped operand '%s', which %s" s o reason
         | PipelineRefusal.UnknownColumn(s, c, members) ->
             sprintf
                 "step %d reads column '%s', which is not a member; the members at that step are: %s"
@@ -212,6 +293,124 @@ module PipelineCheck =
             | Some t -> Ok t
             | None -> Error(PipelineRefusal.UnknownTable(step, name, tableNames root))
 
+    /// What the walk knows of a source as a schema: `None` when it cannot name every column's type.
+    let private schemaOfKnowledge (k: SchemaKnowledge) : Schema option =
+        let fields = SchemaWalk.columns k |> List.map ColumnKnowledge.toField
+
+        if List.forall Option.isSome fields then
+            Some(List.choose id fields)
+        else
+            None
+
+    /// A join to a grouped operand (DECISIONS.md D16): the operand's pipeline checked against the model
+    /// as any pipeline over its table is, then the join's keys along a relation the model declares
+    /// between the left side's tables and the operand's table, each right key followed through the
+    /// operand's renames and grouping to the model column it carries.
+    let private checkOperandStep
+        (root: ModelNode)
+        (sources: string -> Schema option)
+        (operands: Operand list)
+        (checkOver: DataSource -> Transform list -> Result<SchemaKnowledge, PipelineRefusal>)
+        (walk: Walk)
+        (step: int, t: Transform)
+        (o: Operand)
+        : Result<Walk, PipelineRefusal> =
+        let misused (why: string) =
+            Error(PipelineRefusal.OperandMisused(step, o.Name, why))
+
+        match t with
+        | Join(_, on, _) ->
+            if Option.isSome (Model.tryTable o.Name root) then
+                misused "shares its name with a table of the model"
+            elif operands |> List.filter (fun x -> x.Name = o.Name) |> List.length > 1 then
+                misused "more than one operand is named"
+            else
+                match checkReads step (on |> List.map fst) walk.Knowledge with
+                | Some r -> Error r
+                | None ->
+                    match Model.tryTable o.Table root with
+                    | None ->
+                        Error(
+                            PipelineRefusal.Operand(
+                                o.Name,
+                                PipelineRefusal.UnknownTable(sourceStep, o.Table, tableNames root)
+                            )
+                        )
+                    | Some(node, _) ->
+                        match
+                            o.Pipeline
+                            |> List.indexed
+                            |> List.tryFind (fun (_, s) -> Option.isSome (Reads.operandOf s))
+                        with
+                        | Some(i, _) ->
+                            misused (
+                                sprintf
+                                    "brings in a second source at its step %d, where an operand reads one table"
+                                    (i + 1)
+                            )
+                        | None ->
+                            checkOver (Ref o.Table) o.Pipeline
+                            |> Result.mapError (fun e -> PipelineRefusal.Operand(o.Name, e))
+                            |> Result.bind (fun out ->
+                                let members = SchemaWalk.names out
+
+                                match on |> List.tryFind (fun (_, r) -> not (List.contains r members)) with
+                                | Some(_, r) -> Error(PipelineRefusal.UnknownColumn(step, r, members))
+                                | None ->
+                                    let carried =
+                                        Operand.provenance (Model.schemaOf node |> List.map _.Name) o.Pipeline
+
+                                    let candidates =
+                                        Model.joins root
+                                        |> List.choose (fun (_, j) ->
+                                            walk.Tables |> List.tryPick (fun left -> oriented root left node.Id j))
+
+                                    let wanted =
+                                        on
+                                        |> List.map (fun (l, r) -> Map.tryFind r carried |> Option.map (fun c -> l, c))
+
+                                    let declared =
+                                        wanted |> List.forall Option.isSome
+                                        && candidates
+                                           |> List.exists (fun pairs ->
+                                               Set.ofList pairs = Set.ofList (List.choose id wanted))
+
+                                    if not declared then
+                                        Error(
+                                            PipelineRefusal.UnrelatedJoin(
+                                                step,
+                                                o.Name,
+                                                on,
+                                                candidates
+                                                |> List.map (fun pairs ->
+                                                    pairs
+                                                    |> List.map (fun (a, b) -> a + " = " + b)
+                                                    |> String.concat ", ")
+                                            )
+                                        )
+                                    else
+                                        match
+                                            on
+                                            |> List.tryPick (fun (l, r) ->
+                                                unitsMeet
+                                                    step
+                                                    ("join key '" + l + "' = '" + r + "'")
+                                                    (SchemaWalk.unitOf l walk.Knowledge)
+                                                    (SchemaWalk.unitOf r out))
+                                        with
+                                        | Some r -> Error r
+                                        | None ->
+                                            let joined (name: string) =
+                                                if name = o.Name then
+                                                    schemaOfKnowledge out
+                                                else
+                                                    sources name
+
+                                            Ok
+                                                { walk with
+                                                    Knowledge = SchemaWalk.ofTransform joined walk.Knowledge t })
+        | _ -> misused "only a join may bring in"
+
     let private checkStep
         (root: ModelNode)
         (sources: string -> Schema option)
@@ -283,14 +482,27 @@ module PipelineCheck =
                         | Some _
                         | None -> walk.Tables })
 
-    /// Check `pipeline` over `source` against `model`. `Ok` carries the walked output knowledge;
-    /// `Error` the first refusal, in step order. Nothing is lowered or evaluated.
-    let check
+    /// Check `pipeline` over `source` against `model`, its joins bringing in `operands` by name
+    /// (DECISIONS.md D16). `Ok` carries the walked output knowledge; `Error` the first refusal, in
+    /// step order. Nothing is lowered or evaluated.
+    let rec checkWith
         (model: ModelNode)
+        (operands: Operand list)
         (source: DataSource)
         (pipeline: Transform list)
         : Result<SchemaKnowledge, PipelineRefusal> =
         let sources = SchemaWalk.ofMap (Model.schemas model)
+
+        let step (w: Walk) (i: int, t: Transform) =
+            let named =
+                match Reads.operandOf t with
+                | Some(Ref name) -> Operand.tryFind name operands
+                | Some(Embedded _)
+                | None -> None
+
+            match named with
+            | Some o -> checkOperandStep model sources operands (checkWith model []) w (i, t) o
+            | None -> checkStep model sources w (i, t)
 
         operandTable model sourceStep source
         |> Result.bind (fun (n, _) ->
@@ -300,5 +512,14 @@ module PipelineCheck =
 
             pipeline
             |> List.mapi (fun i t -> i + 1, t)
-            |> List.fold (fun acc st -> acc |> Result.bind (fun w -> checkStep model sources w st)) (Ok start)
+            |> List.fold (fun acc st -> acc |> Result.bind (fun w -> step w st)) (Ok start)
             |> Result.map _.Knowledge)
+
+    /// Check `pipeline` over `source` against `model`, with no grouped operand. `Ok` carries the walked
+    /// output knowledge; `Error` the first refusal, in step order. Nothing is lowered or evaluated.
+    let check
+        (model: ModelNode)
+        (source: DataSource)
+        (pipeline: Transform list)
+        : Result<SchemaKnowledge, PipelineRefusal> =
+        checkWith model [] source pipeline

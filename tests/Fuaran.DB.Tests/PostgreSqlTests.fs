@@ -383,7 +383,7 @@ let tests =
 
               let g = text "group-by-channel"
               Expect.stringContains g "count(\"c1\")" "count"
-              Expect.stringContains g "sum(\"c3\")" "an int sum, a bigint in the engine"
+              Expect.stringContains g "CAST(sum(\"c3\") AS bigint)" "an int sum, a bigint in the engine at every depth"
               Expect.stringContains g "avg(CAST(\"c3\" AS double precision))" "mean"
               let b = text "group-min-max-bool"
               Expect.stringContains b "bool_and(\"c7\")" "boolean minimum"

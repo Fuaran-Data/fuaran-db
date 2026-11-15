@@ -467,6 +467,7 @@ let private laws (tamper: Admitted -> Transform list) (seed: int) (count: int) :
                         { Model = c.Model
                           Source = Ref "staff"
                           Pipeline = a.Pipeline
+                          Operands = []
                           Bindings = Bindings.none
                           Tables = tables }
 
@@ -815,6 +816,213 @@ let tests =
                   Expect.stringStarts said (Policy.code r) "the rule first"
                   Expect.stringContains said (Policy.attributeRead r) "the attribute read"
                   Expect.stringContains said (Policy.remedy r) "what would satisfy it"
+
+          testCase
+              "a grouped operand is admitted as a pipeline over its table: its grants, its row policy before its grouping, its floor, one join"
+          <| fun _ ->
+              // Departments left-joined to their staff grouped on the department (DECISIONS.md D16).
+              let payroll: Operand =
+                  { Name = "payroll"
+                    Table = "staff"
+                    Pipeline = [ GroupBy([ "dept" ], [ agg "paid" Sum "salary"; agg "heads" Count "staff_id" ]) ] }
+
+              let ownRegion = Filter(Binary(Eq, Col "region", str "north"))
+
+              match
+                  Policy.admitWith
+                      model
+                      analyst
+                      [ payroll ]
+                      (Ref "depts")
+                      [ Join(Ref "payroll", onDept, Left); page 50 ]
+              with
+              | Error r -> failtestf "refused: %s" (Policy.describe r)
+              | Ok a ->
+                  Expect.equal
+                      (a.Operands |> List.map _.Pipeline)
+                      [ [ ownRegion
+                          GroupBy(
+                              [ "dept" ],
+                              [ agg "paid" Sum "salary"
+                                agg "heads" Count "staff_id"
+                                agg "floor_count_1" Count "salary" ]
+                          )
+                          Filter(Binary(Ge, Col "floor_count_1", Lit(Int 3)))
+                          Project [ "dept", "dept"; "paid", "paid"; "heads", "heads" ] ] ]
+                      "the operand's table policy comes first, before its grouping, and the grouping is floored"
+
+                  Expect.contains
+                      a.Applied
+                      (PolicyRule.RowPolicyApplied("staff", "own region", 2, Binary(Eq, Col "region", str "north")))
+                      "recorded at the admitted step of the join that brings the operand in"
+
+                  Expect.contains
+                      a.Applied
+                      (PolicyRule.GroupFloorApplied(1, 3, [ staffCol "salary" "personal" ]))
+                      "the operand's floor, at the written step of its join"
+
+                  Expect.isTrue
+                      (a.Applied
+                       |> List.exists (fun r ->
+                           match r with
+                           | PolicyRule.CostAdmitted(_, 1, _, _) -> true
+                           | _ -> false))
+                      "the operand's join counts once against the join cap"
+
+                  match FoldSplit.lower a ReferenceDialect.dialect Bindings.none with
+                  | Error r -> failtestf "no statement: %s" (Refusal.describe r)
+                  | Ok l ->
+                      let operandPlan = l.Split.Operands |> List.exactlyOne
+                      let planned = operandPlan.Plan.Planned
+
+                      Expect.isLessThan
+                          (planned |> List.findIndex (fun t -> t = ownRegion))
+                          (planned
+                           |> List.findIndex (fun t ->
+                               match t with
+                               | GroupBy _ -> true
+                               | _ -> false))
+                          "explain shows the policy inside the operand, before its grouping"
+
+                      Expect.stringContains
+                          (FoldSplit.describe l.Split |> String.concat "\n")
+                          "joins the grouped operand 'payroll' as a derived table"
+                          "describe names the operand join"
+
+                      Expect.equal
+                          (l.Split.Boundary |> Option.map Refusal.tag)
+                          (Some "unorderedLimit")
+                          "everything before the bounding limit lowers, the operand with its join"
+
+                      let case: PlacementCase =
+                          { Model = model
+                            Source = Ref "depts"
+                            Pipeline = a.Pipeline
+                            Operands = a.Operands
+                            Bindings = Bindings.none
+                            Tables = tables }
+
+                      let expected =
+                          resolveIn tables "depts"
+                          |> Result.bind (
+                              DataFrame.evalPipelineWithInEnv
+                                  (Operand.resolver Map.empty a.Operands (resolveIn tables))
+                                  Map.empty
+                                  a.Pipeline
+                          )
+
+                      match PlacementLaws.placed ReferenceDialect.execute case l with
+                      | PlacementLaws.Answered answer -> Expect.equal answer expected "the placement is the reference's"
+                      | other -> failtestf "the placement answered %A" other
+
+          testCase "a grouped operand is refused by the rule it breaks, at the step of the join that brings it in"
+          <| fun _ ->
+              let op (name: string) (table: string) (steps: Transform list) : Operand =
+                  { Name = name
+                    Table = table
+                    Pipeline = steps }
+
+              let byDept = GroupBy([ "dept" ], [ agg "heads" Count "staff_id" ])
+
+              let refusedWith (m: ModelNode) (subject: Subject) (o: Operand) (steps: Transform list) =
+                  match Policy.admitWith m subject [ o ] (Ref "depts") (steps @ [ page 5 ]) with
+                  | Error r -> r
+                  | Ok _ -> failtestf "%s was admitted" o.Name
+
+              let joined (o: Operand) = [ Join(Ref o.Name, onDept, Left) ]
+
+              let clerk: Subject =
+                  { analyst with
+                      Principal = "clerk"
+                      Grants = [ grant "public" GrantLevel.RowLevel; grant "internal" GrantLevel.RowLevel ] }
+
+              Expect.equal
+                  (refusedWith
+                      model
+                      clerk
+                      (op "paid" "staff" [ GroupBy([ "dept" ], [ agg "paid" Sum "salary" ]) ])
+                      (joined (op "paid" "" [])))
+                  (PolicyRefusal.ColumnNotGranted(
+                      PolicySite.Step 1,
+                      staffCol "salary" "personal",
+                      [ "public"; "internal" ]
+                  ))
+                  "a column the operand reads must be granted"
+
+              Expect.equal
+                  (refusedWith
+                      model
+                      analyst
+                      (op "mailed" "staff" [ Filter(Binary(Eq, Col "email", str "x")); byDept ])
+                      (joined (op "mailed" "" [])))
+                  (PolicyRefusal.AggregateOnly(PolicySite.Step 1, staffCol "email" "personal", "a filter predicate"))
+                  "an aggregate-only column is admitted only inside the operand's aggregates"
+
+              Expect.equal
+                  (refusedWith
+                      (modelWith [ { fullLimit with MinGroupSize = None } ])
+                      analyst
+                      (op "paid" "staff" [ GroupBy([ "dept" ], [ agg "paid" Sum "salary" ]) ])
+                      (joined (op "paid" "" [])))
+                  (PolicyRefusal.FloorUndeclared(1, staffCol "salary" "personal"))
+                  "no floor, no aggregate, inside an operand as outside"
+
+              let pipelineRefusal (o: Operand) (steps: Transform list) =
+                  match refusedWith model hr o steps with
+                  | PolicyRefusal.Pipeline p -> p
+                  | other -> failtestf "%s refused as %A" o.Name other
+
+              match pipelineRefusal (op "heads" "staff" [ byDept ]) [ Union(Ref "heads") ] with
+              | PipelineRefusal.OperandMisused(1, "heads", why) -> Expect.stringContains why "only a join" "a union"
+              | other -> failtestf "%A" other
+
+              match pipelineRefusal (op "projects" "staff" [ byDept ]) (joined (op "projects" "" [])) with
+              | PipelineRefusal.OperandMisused(1, "projects", why) -> Expect.stringContains why "table" "a table's name"
+              | other -> failtestf "%A" other
+
+              match
+                  pipelineRefusal
+                      (op "wide" "staff" [ Join(Ref "projects", onDept, Inner); byDept ])
+                      (joined (op "wide" "" []))
+              with
+              | PipelineRefusal.OperandMisused(1, "wide", why) -> Expect.stringContains why "second source" "one table"
+              | other -> failtestf "%A" other
+
+              match pipelineRefusal (op "lost" "nowhere" [ byDept ]) (joined (op "lost" "" [])) with
+              | PipelineRefusal.Operand("lost", PipelineRefusal.UnknownTable(0, "nowhere", _)) -> ()
+              | other -> failtestf "%A" other
+
+              match
+                  pipelineRefusal
+                      (op "heads" "staff" [ GroupBy([ "dept" ], [ agg "heads" Count "nope" ]) ])
+                      (joined (op "heads" "" []))
+              with
+              | PipelineRefusal.Operand("heads", PipelineRefusal.UnknownColumn(1, "nope", _)) -> ()
+              | other -> failtestf "%A" other
+
+              match
+                  pipelineRefusal
+                      (op "regional" "staff" [ GroupBy([ "region" ], [ agg "heads" Count "staff_id" ]) ])
+                      [ Join(Ref "regional", [ "region", "region" ], Left) ]
+              with
+              | PipelineRefusal.UnrelatedJoin(1, "regional", _, _) -> ()
+              | other -> failtestf "%A" other
+
+              // A key renamed inside the operand is followed to the relation's column.
+              match
+                  Policy.admitWith
+                      model
+                      hr
+                      [ op
+                            "units"
+                            "staff"
+                            [ Project [ "dept", "unit"; "staff_id", "staff_id" ]
+                              GroupBy([ "unit" ], [ agg "heads" Count "staff_id" ]) ] ]
+                      (Ref "depts")
+                      [ Join(Ref "units", [ "dept", "unit" ], Left); page 5 ]
+              with
+              | Ok _ -> ()
+              | Error r -> failtestf "a renamed key was refused: %s" (Policy.describe r)
 
           testCase "the policy laws hold over the sample, with every refusal and every rewrite reached"
           <| fun _ ->

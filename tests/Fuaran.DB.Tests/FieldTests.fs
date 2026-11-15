@@ -369,6 +369,7 @@ let tests =
                       FoldSplit.lowerUnchecked
                           freight
                           ReferenceDialect.dialect
+                          []
                           (Ref "shipments")
                           pipeline
                           Bindings.none

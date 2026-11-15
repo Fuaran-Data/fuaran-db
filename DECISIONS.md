@@ -1,5 +1,106 @@
 # Fuaran.DB — decisions (newest first)
 
+## 2026-11-15 — D16: a join to a grouped operand on the declared key lowers, and `Count` is pinned (Phase 34)
+
+D4.2 admits a join only along a relation the model declares between two modelled tables, because a join is
+the one verb that can fan out and the model has no cardinality to check a fan-out against. A consumer's
+roll-up needs one attribution row per order: the attribution rows grouped on the order key, the most of each
+field, left-joined to the orders. With the grouped side outside the subset, the boundary fell at the join and
+the whole roll-up ran locally. Grouping the right side on the relation's key makes it at most one row per key,
+which is checkable from the pipeline alone. The same roll-up's quality figures count the orders that state a
+spend beside the orders, and whether a lowered `Count` agrees with the reference on every null shape was not
+pinned by any fixture. Eight rulings.
+
+1. **A grouped operand is a named sub-pipeline, carried beside the pipeline.** The transform algebra's sources
+   are an embedded table or a name (`DataSource`), so a sub-pipeline cannot be a join's operand inside the
+   algebra. An `Operand` is a name, the model name of one table, and a pipeline over that table; a join brings
+   it in as `Join(Ref name, on, kind)`. What it MEANS is fixed by `Operand.resolver`: the reference evaluator's
+   answer to the operand's pipeline over its table. Every lowering of it is held to that. `check` and `admit`
+   keep their signatures and name no operand; `PipelineCheck.checkWith` and `Policy.admitWith` take the
+   operands a pipeline's joins name. *Reopen* if the algebra gains a sub-pipeline source: the operand then
+   becomes that source, and this record its wire.
+
+2. **The check runs over the operand as over any pipeline.** Its pipeline is checked against the model over
+   its table (`PipelineRefusal.Operand` wraps a refusal inside it, its steps counted within the operand). It
+   may be named only by a join, by a name no table of the model holds and no other operand holds, and it
+   brings in no second source (`OperandMisused` says which). The join's keys must follow a relation the model
+   declares between the left side's tables and the operand's table: each right key is followed through the
+   operand's renames and grouping keys to the model column it carries (`Operand.provenance`, D4.3's provenance
+   over a sub-pipeline), and a key the operand derives or aggregates names no relation (`UnrelatedJoin`).
+
+3. **It lowers when it ends in a grouping on exactly the join's keys**, and that is why it cannot fan out. The
+   operand must lower in full; its last grouping may be followed only by filters and projections, which keep at
+   most one row per key; and that grouping's keys, followed through those projections, must be exactly the
+   keys the join reads. Then the right side holds at most one row per key, so every left row meets at most one
+   right row: the join keeps or drops rows and never multiplies them, whatever the model's cardinality. A
+   grouped operand that breaks any of these places the boundary as `OperandNotLowered`, naming the reason
+   ("it is grouped on cust, channel, not on the join's keys cust, so the join could fan out"), and the join
+   runs locally over the reference's answer to the operand. Kinds are D4.4's, `Inner`, `Left`, `Semi` and
+   `Anti`. *Reopen* if `JoinSpec` gains a cardinality (D4.2's own reopening), or if a consumer needs an
+   operand grouped on a superset of the key with a further reduction after it.
+
+4. **The form: a derived table joined on the minted key columns.** The operand lowers through the same walk
+   as any pipeline, from a scan of its table with aliases continuing the left side's, and the join's right
+   side is that relation, rendered as a derived table (`t<n>`) by the existing renderer. Its keys are the
+   aliases its grouping minted. A right column the left already names is suffixed `_right`, as the reference
+   names it. The right side renders after the left, so its parameters take the ordinals after the left's,
+   and the request-text law holds of every statement.
+
+5. **The policy runs over the operand as over any pipeline.** Its columns are walked against the subject's
+   grants from its own table, and a refusal inside it is placed at the step of the join that brings it in
+   (`PolicySite.Step` of that join), since the operand is part of that step. An aggregate-only column is
+   admitted inside the operand's aggregates and flows into the pipeline as aggregated lineage; a grouping in
+   the operand over one is floored at the model's floor as any grouping is (`GroupFloorApplied` at the join's
+   written step), and with no floor declared it is `FloorUndeclared` at that step. **A row policy on the
+   operand's table applies inside the operand, before its grouping**: its filter is the operand's first step,
+   recorded as `RowPolicyApplied` at the admitted step of the join. `Admitted.Operands` carries the operands so
+   rewritten, and `explain` shows the rewrite: `SplitReport.Operands` holds each operand's planned pipeline, the
+   policy's filter ahead of the grouping, and `FoldSplit.describe` says each operand join in a sentence. A left
+   join to an operand over a policed table is therefore admitted, where a left join to the table itself is
+   `PolicyUnwrappable`. The join cap counts the operand's join as one (the operand brings in no further
+   source), and its groupings are held to the grouping-column cap at its join. *No `PolicyRule` or
+   `PolicySite` case is added*: both are recorded on the session's wire and in its projections, and reading
+   an operand's rules through the join that brings it in loses nothing a reader needs.
+
+6. **`Count` is pinned against the reference, and agrees.** The kit's nine `count-*` fixtures put a lowered
+   `Count` over a group whose values are all null (0), a mixed group, no input with a key (no groups) and
+   without one (no row, D4.5's `NonEmpty`), nulls in a grouping key (one group), the columns a left join leaves
+   null (0), a grouped operand's counts after a left join (null for the row it does not match, then skipped by
+   a count of them), a count of rows beside a count of values, and a distinct count past a null. Both engines
+   answer the reference's meaning on every one, so no lowering changes and nothing is pinned. *A premise of
+   the phase, checked and corrected*: it spoke of `Count *`. The algebra has no row count: every aggregate
+   names a column (`Agg.Of`), and the reference's `Count` counts the present values of it. A count of rows is
+   a count of a column no row leaves null, or of a derived constant, which is what `count-rows-and-values`
+   pins. A difference found later is a fixture's verdict, never an assumption.
+
+7. **One difference was found, in a dialect, and fixed by spelling.** PostgreSQL's `sum` over an `integer`
+   answers a `bigint`, and over a `bigint` a `numeric`. A count or a sum the statement computed is a `bigint`
+   in the engine, so a sum over a grouped operand's counts answered a `numeric` the decoder refused as a
+   type error (`count-operand-after-left-join`, on the engine). The dialect now spells a sum over an `int`
+   column `CAST(sum(x) AS bigint)`, so an int sum is a `bigint` at every depth, and `decodeCell` refuses it past
+   int32 exactly as before. T-SQL already widened every int sum to `bigint` (D8) and answers `COUNT` as `int`.
+
+8. **The evidence.** The placement laws gain two laws, each with its sample adequacy: "a join to a grouped
+   operand on the relation's keys equals the reference's join to the operand's pipeline" (every kind reached)
+   and "a lowered Count equals the reference's" (a count, a count fed by a left join, and a count inside an
+   operand reached). The sample draws eight operands: four that lower and four that place the boundary (wider
+   than the key, ungrouped, a step that does not lower, a key the operand derives). Each law's falsifier is a
+   permanent test: an engine whose join matches a null key to a null key, which the operand's null group
+   exposes, and an engine whose `COUNT` counts nulls. The kit gains `Fixtures.grouped` (7) and
+   `Fixtures.counts` (9), 107 in all; a fixture that joins an operand emits an `operands` member. The first
+   consumer's attribution shape (orders left-joined to one attribution row per key, then rolled up with a sum
+   and a distinct count) lowers to one statement with an empty local suffix and equals the reference.
+   - **SQL Server**: SQL Server 2025 LocalDB 17.0.4025.3 (Express Edition, 64-bit), collation
+     `SQL_Latin1_General_CP1_CI_AS`, through the instance's named pipe with `Encrypt=false`: 107 fixtures,
+     105 agreed, 2 differing as pinned (`difference-collation-case`, `difference-collation-order`,
+     `CaseInsensitiveCollation`, as in D15), 0 differing unexpectedly. All 16 new fixtures agreed.
+   - **PostgreSQL**, its first recorded run: PostgreSQL 18.6 (Debian 18.6-1.pgdg13+2, 64-bit) in a local
+     container, database collation `en_US.utf8` (libc) with the kit's strings under `C`: 107 fixtures, 106
+     agreed, 1 differing as pinned (`difference-code-point-order`, `CodePointOrder`), 0 differing
+     unexpectedly, after ruling 7; before it, `count-operand-after-left-join` differed. Over the ICU root
+     locale the dialect gave 106, 1 and 0 as well, and the falsifier went red there on
+     `difference-collation-order`, as in D11.5. No conformance database survived either run.
+
 ## 2026-11-12 — D15: a statically typed `Derive` lowers, and so does a grouping keyed by it (Phase 33)
 
 D4.4 kept `Derive` out of the declared subset on recipe 07's evidence, 20 lines on "a derived column's type

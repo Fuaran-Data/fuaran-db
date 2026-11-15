@@ -112,6 +112,38 @@ minor. Built against the same line as 0.1.0, `Fuaran.Core.*` 0.42.0 and `Fuaran.
 - **Additive — the conformance set**: `Fixtures.derives`, 22 fixtures, take the set to 91. Every existing
   fixture keeps its content; every emitted file is re-stamped with the kit version, 0.2.0.
 
+A join to a grouped operand on the declared key lowers, and `Count`'s null semantics are pinned against the
+reference (Phase 34, DECISIONS.md D16). It rides this draft: its changes are of the class the draft already
+declares, breaking on the `0.x` line, and 0.2.0 is untagged.
+
+- **Breaking — three closed unions gain cases.** `PipelineRefusal` gains `Operand` (a refusal inside a grouped
+  operand's pipeline) and `OperandMisused`; the provider's `Refusal` gains `OperandNotLowered`, and
+  `Refusal.allTags` gains its tag.
+- **Breaking — four records gain a field**, so a full-literal construction stops compiling: `Fixture.Operands`,
+  `PlacementCase.Operands`, `SplitReport.Operands` (each grouped operand as planned, an `OperandPlan`) and
+  `Lowered.Operands` (the operands bound, which `FoldSplit.finish` reads).
+- **Additive — the grouped operand.** `Operand` (a name, a table, a pipeline) with `Operand.tryFind`,
+  `Operand.resolver` (what an operand means: the reference over its pipeline) and `Operand.provenance`;
+  `PipelineCheck.checkWith` and `Policy.admitWith` take the operands a pipeline's joins name, and
+  `Admitted.Operands` carries them rewritten by the policy. `check` and `admit` keep their signatures and
+  admit no operand, so every existing caller compiles and means what it meant.
+- **The posture, widened (D16)**: a `Join` lowers when it names a grouped operand that reads one modelled
+  table, lowers in full, and ends in a grouping on exactly the keys the join reads, along a relation the model
+  declares. Any other operand places the boundary as `OperandNotLowered`, and the join runs locally over the
+  reference's answer to the operand. No `PolicyRule` or `PolicySite` case is added: an operand's row policy is
+  a `RowPolicyApplied` at the admitted step of its join, and a refusal inside it is placed at that step.
+- **A dialect's spelling changes**: PostgreSQL's `Sum` over an `integer` column is
+  `CAST(sum(x) AS bigint)`, where it was `sum(x)`. A computed int (a count, a sum) is a `bigint` in the engine,
+  and `sum` over a `bigint` answers a `numeric` the decoder refused.
+- **Additive — `FoldSplit.joinedOperands`**, each lowered operand join's planned step and plan;
+  `FoldSplit.describe` says each in a sentence.
+- **Additive — the placement laws**: a grouped-operand law and a `Count` law, each with its sample adequacy.
+  `PlacementLaws.laws` answers four more `LawResult`s; read them by law, not by position.
+- **Additive — the conformance set**: `Fixtures.grouped` (7) and `Fixtures.counts` (9) take the set to 107. A
+  fixture that joins a grouped operand carries an `operands` member, each a name, a source table and a
+  pipeline with the bindings substituted; a fixture without one emits no such member, so the 91 existing
+  files are unchanged.
+
 ### 0.1.0
 
 The first surface (Phase 1899): the dataset model and its op vocabulary, the model rules, the pipeline

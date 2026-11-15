@@ -121,14 +121,33 @@ let private traverse (f: 'a -> Result<'b, 'e>) (xs: 'a list) : Result<'b list, '
 let private keyEq (a: Cell) (b: Cell) =
     not (Cell.isNull a) && not (Cell.isNull b) && Cell.compare a b = Some 0
 
+/// How a deliberately wrong engine departs from SQL's meaning, for the laws' falsifiers.
+type Wrong =
+    {
+        /// Nulls sort first ascending.
+        NullsFirst: bool
+        /// A keyless aggregate over no rows answers a row, as if `NonEmpty` were dropped.
+        KeylessAlwaysRow: bool
+        /// `COUNT` counts null values as rows.
+        CountsNulls: bool
+        /// A join matches a null key to a null key.
+        NullKeysMatch: bool
+    }
+
+/// The engine that departs from nothing.
+let right: Wrong =
+    { NullsFirst = false
+      KeylessAlwaysRow = false
+      CountsNulls = false
+      NullKeysMatch = false }
+
 let rec private run
     (tables: Map<string, Table>)
     (parameters: Parameter list)
-    (nullsFirst: bool)
-    (keylessAlwaysRow: bool)
+    (wrong: Wrong)
     (r: Relation)
     : Result<Rows, EvalError> =
-    let go = run tables parameters nullsFirst keylessAlwaysRow
+    let go = run tables parameters wrong
 
     let schemaOf (outputs: Output list) =
         outputs |> List.map (fun o -> Field.create o.Alias o.Type)
@@ -187,7 +206,10 @@ let rec private run
                 let keys = on |> List.map (fun (a, b) -> index l.Schema a, index rr.Schema b)
 
                 let matches (lrow: Cell[]) (rrow: Cell[]) =
-                    keys |> List.forall (fun (i, j) -> keyEq lrow[i] rrow[j])
+                    keys
+                    |> List.forall (fun (i, j) ->
+                        keyEq lrow[i] rrow[j]
+                        || (wrong.NullKeysMatch && Cell.isNull lrow[i] && Cell.isNull rrow[j]))
 
                 let pick (lrow: Cell[]) (rrow: Cell[] option) =
                     columns
@@ -231,7 +253,11 @@ let rec private run
 
             // SQL answers one row for a keyless aggregate over no rows; `NonEmpty` drops it.
             let groups =
-                if List.isEmpty keys && List.isEmpty groups && (keylessAlwaysRow || not nonEmpty) then
+                if
+                    List.isEmpty keys
+                    && List.isEmpty groups
+                    && (wrong.KeylessAlwaysRow || not nonEmpty)
+                then
                     [ [] ]
                 else
                     groups
@@ -246,7 +272,12 @@ let rec private run
                 aggregates
                 |> traverse (fun (fn, a, _) ->
                     let i = index rows.Schema a
-                    DataFrame.aggregateCells fn rows.Schema[i].Type (members |> List.map (fun row -> row[i])))
+                    let cells = members |> List.map (fun row -> row[i])
+
+                    if wrong.CountsNulls && fn = Count then
+                        Ok(Int(List.length cells))
+                    else
+                        DataFrame.aggregateCells fn rows.Schema[i].Type cells)
                 |> Result.map (fun cells -> keyCells @ cells |> List.toArray))
             |> Result.map (fun out ->
                 { Schema =
@@ -262,7 +293,7 @@ let rec private run
                 | _ -> 0
 
             let order =
-                if nullsFirst then
+                if wrong.NullsFirst then
                     // A deliberately wrong engine, for the laws' falsifier: nulls first ascending.
                     fun (a: Cell list) (b: Cell list) ->
                         let flagged (row: Cell list) =
@@ -291,11 +322,12 @@ let rec private run
                     |> List.skip (min (count offset) sorted.Length)
                     |> List.truncate (count limit) })
 
-/// Run a statement's form over tables keyed and named physically: its rows, positionally.
-let executeWith (nullsFirst: bool) (keylessAlwaysRow: bool) : PlacementLaws.Executor =
+/// Run a statement's form over tables keyed and named physically, departing from SQL's meaning as `wrong`
+/// says: its rows, positionally.
+let executeAs (wrong: Wrong) : PlacementLaws.Executor =
     fun statement tables ->
-        run tables statement.Parameters nullsFirst keylessAlwaysRow statement.Form
+        run tables statement.Parameters wrong statement.Form
         |> Result.map (fun rows -> rows.Rows |> List.map List.ofArray)
 
 /// The reference engine.
-let execute: PlacementLaws.Executor = executeWith false false
+let execute: PlacementLaws.Executor = executeAs right

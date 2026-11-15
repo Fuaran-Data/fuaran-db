@@ -870,6 +870,7 @@ let tests =
                       FoldSplit.lowerUnchecked
                           measuredModel
                           ReferenceDialect.dialect
+                          []
                           (Ref "orders")
                           (publicPipeline 10)
                           Bindings.none

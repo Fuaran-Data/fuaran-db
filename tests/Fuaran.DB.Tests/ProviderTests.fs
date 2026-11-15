@@ -17,7 +17,7 @@ let private model = PlacementLaws.modelOf DecimalType
 let private d = ReferenceDialect.dialect
 
 let private lower (pipeline: Transform list) (bindings: Bindings) =
-    match FoldSplit.lowerUnchecked model d (Ref "orders") pipeline bindings None with
+    match FoldSplit.lowerUnchecked model d [] (Ref "orders") pipeline bindings None with
     | Ok l -> l
     | Error r -> failwithf "refused whole: %s" (Refusal.describe r)
 
@@ -98,7 +98,7 @@ let tests =
               let case0 = PlacementLaws.sample seed 1 |> List.head
 
               for pipeline, name in pipelines do
-                  match FoldSplit.lowerUnchecked model d (Ref "orders") pipeline Bindings.none None with
+                  match FoldSplit.lowerUnchecked model d [] (Ref "orders") pipeline Bindings.none None with
                   | Ok l ->
                       match l.Split.Boundary with
                       | Some(Refusal.RepeatedName(_, n)) -> Expect.equal n name "the lowering names the column"
@@ -119,7 +119,13 @@ let tests =
           testCase "the parity law goes red over an engine that orders nulls first (its falsifier)"
           <| fun _ ->
               let results =
-                  PlacementLaws.laws d (ReferenceDialect.executeWith true false) seed iterations
+                  PlacementLaws.laws
+                      d
+                      (ReferenceDialect.executeAs
+                          { ReferenceDialect.right with
+                              NullsFirst = true })
+                      seed
+                      iterations
 
               Expect.isFalse (results |> List.head |> _.Passed) "nulls-first ordering is caught"
 
@@ -127,7 +133,13 @@ let tests =
               "the parity law goes red over an engine that answers a keyless aggregate over nothing (its falsifier)"
           <| fun _ ->
               let results =
-                  PlacementLaws.laws d (ReferenceDialect.executeWith false true) seed iterations
+                  PlacementLaws.laws
+                      d
+                      (ReferenceDialect.executeAs
+                          { ReferenceDialect.right with
+                              KeylessAlwaysRow = true })
+                      seed
+                      iterations
 
               Expect.isFalse (results |> List.head |> _.Passed) "the missing HAVING is caught"
 
@@ -162,7 +174,8 @@ let tests =
                               Form = skew statement.Form }
                           tables
 
-              let results = PlacementLaws.laws d skewed seed iterations
+              // A derived key is one draw among many, so the falsifier reads a longer sample than the laws.
+              let results = PlacementLaws.laws d skewed seed (iterations * 3)
 
               let law =
                   results
@@ -264,6 +277,147 @@ let tests =
                     "orders", IntType
                     "stating", IntType ]
                   "the result schema, in the pipeline's names"
+
+          testCase "the count law goes red over an engine whose COUNT counts nulls (its falsifier)"
+          <| fun _ ->
+              let results =
+                  PlacementLaws.laws
+                      d
+                      (ReferenceDialect.executeAs
+                          { ReferenceDialect.right with
+                              CountsNulls = true })
+                      seed
+                      iterations
+
+              let law =
+                  results
+                  |> List.find (fun r -> r.Law.StartsWith "a lowered Count equals the reference's")
+
+              Expect.isFalse law.Passed "a null counted as a value is caught"
+
+          testCase "the grouped-operand law goes red over an engine whose join matches a null key (its falsifier)"
+          <| fun _ ->
+              // A grouped operand holds one row for the null key, and a left row with a null key must not
+              // meet it: an engine that matches the two is caught by the operand law itself.
+              let results =
+                  PlacementLaws.laws
+                      d
+                      (ReferenceDialect.executeAs
+                          { ReferenceDialect.right with
+                              NullKeysMatch = true })
+                      seed
+                      iterations
+
+              let law =
+                  results
+                  |> List.find (fun r -> r.Law.StartsWith "a join to a grouped operand on the relation's keys")
+
+              Expect.isFalse law.Passed "a null key matched is caught"
+
+          testCase
+              "the first consumer's attribution pipeline lowers to one statement with an empty local suffix, and equals the reference"
+          <| fun _ ->
+              // Each order left-joined to one attribution row per order (touches grouped on the order key,
+              // the most of each field), then rolled up by the attributed value with a sum and a distinct
+              // count (DECISIONS.md D16). A filter with a bound value on each side orders the parameters.
+              let attribution: Operand =
+                  { Name = "attribution"
+                    Table = "touches"
+                    Pipeline =
+                      [ Filter(Binary(Gt, Col "w", Param "p_floor"))
+                        GroupBy([ "ref" ], [ { Name = "weight"; Fn = Max; Of = "w" } ]) ] }
+
+              let pipeline =
+                  [ Filter(Binary(Ne, Col "s", Param "p_s"))
+                    Join(Ref "attribution", [ "id", "ref" ], Left)
+                    GroupBy(
+                        [ "weight" ],
+                        [ { Name = "spend"; Fn = Sum; Of = "amt" }
+                          { Name = "customers"
+                            Fn = CountDistinct
+                            Of = "fk" } ]
+                    ) ]
+
+              let bindings =
+                  { Bindings.none with
+                      Params = Map.ofList [ "p_floor", Float 0.5; "p_s", Str "zq-a" ] }
+
+              match FoldSplit.lowerUnchecked model d [ attribution ] (Ref "orders") pipeline bindings None with
+              | Error r -> failtestf "refused whole: %s" (Refusal.describe r)
+              | Ok l ->
+                  Expect.isNone l.Split.Boundary "every planned step lowers"
+                  Expect.isEmpty l.Suffix "nothing runs locally"
+
+                  Expect.equal
+                      (FoldSplit.joinedOperands l.Split |> List.map (fun (_, o) -> o.Name))
+                      [ "attribution" ]
+                      "explain names the operand joined"
+
+                  Expect.stringContains
+                      (FoldSplit.describe l.Split |> String.concat "\n")
+                      "joins the grouped operand 'attribution' as a derived table"
+                      "describe says it"
+
+                  Expect.isNone (textOffence model l.Statement) "no request text"
+
+                  Expect.equal
+                      (Relation.parameters l.Statement.Form)
+                      (List.init (List.length l.Statement.Parameters) id)
+                      "the parameters are referenced once each, in the order the text renders them"
+
+                  Expect.equal
+                      (l.Statement.Parameters |> List.map _.Value)
+                      [ Str "zq-a"; Float 0.5 ]
+                      "the left side's parameters render first, the operand's after them"
+
+                  let c =
+                      { (PlacementLaws.sample seed 1 |> List.head) with
+                          Source = Ref "orders"
+                          Pipeline = pipeline
+                          Operands = [ attribution ]
+                          Bindings = bindings }
+
+                  match PlacementLaws.placed ReferenceDialect.execute c l with
+                  | PlacementLaws.Answered answer ->
+                      Expect.equal answer (PlacementLaws.reference c) "the placement equals the reference"
+                  | other -> failtestf "%A" other
+
+          testCase "a grouped operand not grouped on exactly the join's keys places the boundary, by name"
+          <| fun _ ->
+              let operand (steps: Transform list) : Operand =
+                  { Name = "touch"
+                    Table = "touches"
+                    Pipeline = steps }
+
+              let count = { Name = "n"; Fn = Count; Of = "w" }
+
+              let boundaryOf (o: Operand) =
+                  match
+                      FoldSplit.lowerUnchecked
+                          model
+                          d
+                          [ o ]
+                          (Ref "orders")
+                          [ Join(Ref "touch", [ "id", "ref" ], Left) ]
+                          Bindings.none
+                          None
+                  with
+                  | Ok l -> l.Split.Boundary
+                  | Error r -> failtestf "refused whole: %s" (Refusal.describe r)
+
+              for steps, said in
+                  [ [ GroupBy([ "ref"; "w" ], [ count ]) ], "could fan out"
+                    [ Filter(Not(IsNull(Col "w"))) ], "does not end in a grouping"
+                    [ GroupBy([ "ref" ], [ count ]); Derive("m", Col "n") ], "after its last grouping"
+                    [ GroupBy([ "ref" ], [ { count with Fn = Median } ]) ], "does not lower"
+                    [ Join(Ref "orders", [ "ref", "id" ], Inner); GroupBy([ "ref" ], [ count ]) ], "second source" ] do
+                  match boundaryOf (operand steps) with
+                  | Some(Refusal.OperandNotLowered(1, "touch", why) as r) ->
+                      Expect.stringContains why said (sprintf "%A" steps)
+                      Expect.stringContains (Refusal.describe r) "grouped operand 'touch'" "describe names the operand"
+                  | other -> failtestf "%A placed %A" steps other
+
+              Expect.isNone (boundaryOf (operand [ GroupBy([ "ref" ], [ count ]) ])) "grouped on the key, it lowers"
 
           testCase "a derive whose type the schema does not decide places the boundary as it did before"
           <| fun _ ->
@@ -388,7 +542,7 @@ let tests =
           testCase "a source the model cannot read from is refused whole"
           <| fun _ ->
               let refused (source: DataSource) =
-                  match FoldSplit.lowerUnchecked model d source [] Bindings.none None with
+                  match FoldSplit.lowerUnchecked model d [] source [] Bindings.none None with
                   | Error r -> Some r
                   | Ok _ -> None
 
@@ -424,7 +578,7 @@ let tests =
               let offences =
                   PlacementLaws.sample seed iterations
                   |> List.choose (fun c ->
-                      match FoldSplit.lowerUnchecked c.Model d c.Source c.Pipeline c.Bindings None with
+                      match FoldSplit.lowerUnchecked c.Model d c.Operands c.Source c.Pipeline c.Bindings None with
                       | Error _ -> None
                       | Ok l ->
                           textOffence c.Model l.Statement

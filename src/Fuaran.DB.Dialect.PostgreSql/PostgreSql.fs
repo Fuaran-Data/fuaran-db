@@ -315,8 +315,19 @@ module PostgreSql =
         | Count -> "count(" + arg + ")"
         | CountDistinct -> "count(DISTINCT " + arg + ")"
         // sum over integer answers a bigint, so it reaches `decodeCell`, which refuses it past int32
-        // exactly as the reference does.
-        | Sum -> "sum(" + arg + ")"
+        // exactly as the reference does. An int column the statement computed (a count, a sum) is a
+        // bigint in the engine, and sum over bigint answers a numeric, so the sum is cast back to a
+        // bigint: the conformance run of a sum over a grouped operand's counts found it (DECISIONS.md
+        // D16).
+        | Sum ->
+            match ty with
+            | IntType -> "CAST(sum(" + arg + ") AS bigint)"
+            | FloatType
+            | DecimalType
+            | BoolType
+            | StringType
+            | DateType
+            | TimestampType _ -> "sum(" + arg + ")"
         // avg over integer answers a numeric; the reference's mean is a float.
         | Mean -> "avg(CAST(" + arg + " AS double precision))"
         | Min

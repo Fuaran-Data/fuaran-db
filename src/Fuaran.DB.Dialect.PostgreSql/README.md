@@ -65,12 +65,19 @@ A date binds as a `DateOnly`, and a timestamp as a `DateTime` of unspecified kin
   `Contains` is `strpos(a, b) > 0`, `StartsWith` is `starts_with(a, b)`, and `EndsWith` compares
   `right(a, length(b))` with `b`.
 - **Aggregates:**
-  - `Count` and `CountDistinct`. Both answer a `bigint`, which `decodeCell` narrows.
-  - `Sum`. Over `integer` it answers a `bigint`, which `decodeCell` refuses past int32 with the reference's
-    own refusal.
+  - `Count` and `CountDistinct`. Both answer a `bigint`, which `decodeCell` narrows. A count counts the
+    present values, which is the reference's `Count`: the kit's nine `count-*` fixtures (`DECISIONS.md` D16)
+    put it over an all-null group, a mixed group, no rows with and without a key, a null grouping key, the
+    nulls a left join leaves, a grouped operand's counts after a left join, rows beside values, and a
+    distinct count past a null, and each agreed on the engine. Nothing is pinned.
+  - `Sum`. Over `integer` it is `CAST(sum(x) AS bigint)`, a `bigint` at every depth, which `decodeCell`
+    refuses past int32 with the reference's own refusal. The cast is there because an int the statement
+    computed (a count, a sum) is a `bigint` in the engine, and `sum` over a `bigint` answers a `numeric`:
+    `count-operand-after-left-join` found it on the engine (`DECISIONS.md` D16).
   - `Mean`, as `avg` over a `double precision` cast.
   - `Min` and `Max`. Over `boolean` they are `bool_and` and `bool_or`.
-- **Joins:** every join kind the provider lowers.
+- **Joins:** every join kind the provider lowers. A join to a grouped operand (`DECISIONS.md` D16) joins a
+  derived table, the operand's own select grouped on the join's keys; nothing in the dialect changes for it.
 - **Derived columns** (`DECISIONS.md` D15): a `Derive` the provider lowers is a select of computed
   columns, and a grouping keyed by one groups that select. A computed string is read under `C` like any
   other, because its arms are scanned columns and parameters, each already written `COLLATE "C"`.
@@ -144,5 +151,9 @@ in-memory run cannot: the spelling, the type map in both directions, result deco
 read, the `Round` formula (`filter-round`), and the four constructs SQL Server refuses (`reach-replace`,
 `reach-contains`, `reach-starts-with`, `reach-ends-with`).
 
-The derive fixtures (`DECISIONS.md` D15) have not yet been run on a PostgreSQL engine: the in-memory run
-lowers all 91 fixtures through this dialect and agrees on all 91, and the engine leg arms as before.
+**The recorded run with derived columns, grouped operands and the count fixtures** (`DECISIONS.md` D16) was
+made on PostgreSQL 18.6 (Debian build, x86-64, in a local container), in a UTF-8 database under the libc
+collation `en_US.utf8`. Of 107 fixtures, 106 agreed, 1 differed as pinned (`difference-code-point-order`) and
+0 differed unexpectedly, the derive fixtures of D15 among them. Over the ICU root locale this dialect also gave
+106, 1 and 0, and the falsifier went red there on `difference-collation-order`. Before the `Sum` cast above,
+`count-operand-after-left-join` differed: the engine answered a `numeric` where the statement selects an int.

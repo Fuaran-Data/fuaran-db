@@ -82,6 +82,7 @@ module Kit =
         { Model = Fixtures.model
           Source = Ref f.Source
           Pipeline = f.Pipeline
+          Operands = f.Operands
           Bindings = bindings
           Tables = tables }
 
@@ -214,7 +215,7 @@ module Kit =
 
         let expected = expected f
 
-        match Policy.admit Fixtures.model subject (Ref f.Source) f.Pipeline with
+        match Policy.admitWith Fixtures.model subject f.Operands (Ref f.Source) f.Pipeline with
         | Error r -> report (Verdict.DifferingUnexpectedly(sprintf "the policy refused the fixture: %A" r)) 0 None None
         | Ok admitted ->
             match FoldSplit.lower admitted dialect f.Bindings with
@@ -318,20 +319,36 @@ module Kit =
             [ "model", ModelWire.encodeNodeJson Fixtures.model
               "tables", JObj(Fixtures.physical |> Map.toList |> List.map (fun (k, t) -> k, tableJson t)) ]
 
+    let private pipelineJson (f: Fixture) (steps: Transform list) : JVal =
+        JArr(FoldSplit.bind f.Bindings steps |> List.map DataFrameCodec.encodeTransform)
+
     /// One fixture as emitted: its pipeline with the bindings substituted, its order, its pins, the
-    /// construct it reaches, and the reference's answer over the seed.
+    /// construct it reaches, the grouped operands its joins name (each a name, a source table and a
+    /// pipeline with the bindings substituted), and the reference's answer over the seed.
     let fixtureJson (f: Fixture) : string =
         stamp (
             [ "id", JStr f.Id
               "description", JStr f.Description
               "source", JStr f.Source
-              "pipeline", JArr(FoldSplit.bind f.Bindings f.Pipeline |> List.map DataFrameCodec.encodeTransform)
+              "pipeline", pipelineJson f f.Pipeline
               "ordered", JBool f.Ordered
               "pins", JArr(f.Pins |> List.map (fun p -> JStr(sprintf "%A" p)))
               "expected", answerJson (expected f) ]
             @ (f.Reaches
                |> Option.map (fun c -> "reaches", JStr(sprintf "%A" c))
                |> Option.toList)
+            @ (if List.isEmpty f.Operands then
+                   []
+               else
+                   [ "operands",
+                     JArr(
+                         f.Operands
+                         |> List.map (fun o ->
+                             JObj
+                                 [ "name", JStr o.Name
+                                   "source", JStr o.Table
+                                   "pipeline", pipelineJson f o.Pipeline ])
+                     ) ])
         )
 
     /// The emitted set, as (relative path, text): a manifest, the seed, and one file per fixture.

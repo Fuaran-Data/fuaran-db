@@ -42,6 +42,10 @@ type Refusal =
     /// A join between tables the model does not relate on exactly those keys. Key columns are
     /// followed through renames to the model column they came from.
     | UndeclaredJoin of step: int * operand: string * on: (string * string) list
+    /// A join to a grouped operand (DECISIONS.md D16) whose operand does not lower with it: it does
+    /// not end in a grouping on exactly the keys the join reads, so the join could fan out; or it
+    /// reads more than its one table; or one of its own steps does not lower. `reason` says which.
+    | OperandNotLowered of step: int * operand: string * reason: string
     /// A step reads a column the rows reaching it do not carry; `members` are the columns they do.
     | UnknownColumn of step: int * column: string * members: string list
     /// The step's output would carry a column name twice. A result is read back by name.
@@ -80,6 +84,7 @@ module Refusal =
         | Refusal.JoinKindNotLowered _ -> "joinKindNotLowered"
         | Refusal.OperandNotModelled _ -> "operandNotModelled"
         | Refusal.UndeclaredJoin _ -> "undeclaredJoin"
+        | Refusal.OperandNotLowered _ -> "operandNotLowered"
         | Refusal.UnknownColumn _ -> "unknownColumn"
         | Refusal.RepeatedName _ -> "repeatedName"
         | Refusal.UnboundParam _ -> "unboundParam"
@@ -102,6 +107,7 @@ module Refusal =
           "joinKindNotLowered"
           "operandNotModelled"
           "undeclaredJoin"
+          "operandNotLowered"
           "unknownColumn"
           "repeatedName"
           "unboundParam"
@@ -125,6 +131,7 @@ module Refusal =
         | Refusal.JoinKindNotLowered(s, _)
         | Refusal.OperandNotModelled(s, _)
         | Refusal.UndeclaredJoin(s, _, _)
+        | Refusal.OperandNotLowered(s, _, _)
         | Refusal.UnknownColumn(s, _, _)
         | Refusal.RepeatedName(s, _)
         | Refusal.UnboundParam(s, _)
@@ -191,6 +198,12 @@ module Refusal =
                 s
                 operand
                 (on |> List.map (fun (a, b) -> a + " = " + b) |> String.concat ", ")
+        | Refusal.OperandNotLowered(s, operand, reason) ->
+            sprintf
+                "step %d joins the grouped operand '%s', which does not lower with the join: %s; it runs locally"
+                s
+                operand
+                reason
         | Refusal.UnknownColumn(s, c, members) ->
             sprintf
                 "step %d reads column '%s', which the rows reaching it do not carry (they carry: %s); it runs locally, where the reference reports it"

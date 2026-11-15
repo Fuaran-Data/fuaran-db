@@ -494,6 +494,111 @@ module internal Lowering =
                             Columns = picked |> List.map snd
                             Next = b.Next + List.length pairs }
 
+    /// The join kinds the declared subset lowers, asked of the dialect.
+    let private joinKindAdmitted (d: Dialect) (step: int) (kind: JoinKind) : Result<unit, Refusal> =
+        match kind with
+        | Right
+        | Outer -> Error(Refusal.JoinKindNotLowered(step, kind))
+        | Inner
+        | Left
+        | Semi
+        | Anti ->
+            match d.Refuses(Construct.Join kind) with
+            | Some why -> Error(Refusal.DialectRefuses(step, Construct.Join kind, why))
+            | None -> Ok()
+
+    /// Does the model declare a relation between the tables `left` and `right` (node ids) on exactly the
+    /// `(left column id, right column id)` pairs `wanted`, in either orientation?
+    let private declaredBetween (model: ModelNode) (left: string) (right: string) (wanted: Set<string * string>) =
+        Model.joins model
+        |> List.exists (fun (_, j) ->
+            (j.Left = left && j.Right = right && Set.ofList j.On = wanted)
+            || (j.Left = right
+                && j.Right = left
+                && Set.ofList (j.On |> List.map (fun (a, c) -> c, a)) = wanted))
+
+    /// The table the left side's join keys all came from, followed through renames, or `None` when a key
+    /// has no model column or the keys came from two tables.
+    let private leftTableOf (b: Built) (on: (string * string) list) : (string * (string * string) list) option =
+        let origins = on |> List.map (fun (l, _) -> (tryCol l b.Columns).Value.Origin)
+
+        if List.isEmpty on || origins |> List.exists Option.isNone then
+            None
+        else
+            let pairs = List.zip (origins |> List.map Option.get) (on |> List.map snd)
+
+            match pairs |> List.map (fun ((t, _), _) -> t) |> List.distinct with
+            | [ leftTable ] -> Some(leftTable, pairs |> List.map (fun ((_, l), r) -> l, r))
+            | _ -> None
+
+    /// The join of the relation built so far to a right relation already lowered: `rightOut` its
+    /// columns, `rightParams` the parameters it binds (numbered from 0, rendered after the left's) and
+    /// `next` the alias number after it. The keys must share a type; a right name the left already
+    /// carries is suffixed `_right`, as the reference names it.
+    let private joinTo
+        (step: int)
+        (b: Built)
+        (kind: JoinKind)
+        (on: (string * string) list)
+        (rightRel: Relation, rightOut: Col list, rightParams: (Cell * ColumnType) list, next: int)
+        : Result<Built, Refusal> =
+        let rightCol (r: string) =
+            rightOut |> List.find (fun c -> c.Output.Name = r)
+
+        match
+            on
+            |> List.tryFind (fun (l, r) -> (tryCol l b.Columns).Value.Output.Type <> (rightCol r).Output.Type)
+        with
+        | Some(l, r) -> Error(Refusal.Untyped(step, sprintf "join keys '%s' and '%s' are of two types" l r))
+        | None ->
+            let leftNames = members b.Columns |> Set.ofList
+
+            let rightNamed =
+                rightOut
+                |> List.map (fun c ->
+                    if Set.contains c.Output.Name leftNames then
+                        { c with
+                            Output =
+                                { c.Output with
+                                    Field = ColumnSpec.renameField (c.Output.Name + "_right") c.Output.Field } }
+                    else
+                        c)
+
+            let columns =
+                match kind with
+                | Semi
+                | Anti -> b.Columns |> List.map (fun c -> Pick.Left c.Output.Alias, c)
+                | Inner
+                | Left
+                | Right
+                | Outer ->
+                    (b.Columns |> List.map (fun c -> Pick.Left c.Output.Alias, c))
+                    @ (rightNamed |> List.map (fun c -> Pick.Right c.Output.Alias, c))
+
+            match repeated (columns |> List.map (fun (_, c) -> c.Output.Name)) with
+            | Some name -> Error(Refusal.RepeatedName(step, name))
+            | None ->
+                let keyAliases =
+                    on
+                    |> List.map (fun (l, r) -> (tryCol l b.Columns).Value.Output.Alias, (rightCol r).Output.Alias)
+
+                // The right side renders after the left, so its parameters take the ordinals after them.
+                let shift = List.length b.Params
+
+                Ok
+                    { b with
+                        Relation =
+                            Relation.Join(
+                                b.Relation,
+                                renumber (fun i -> i + shift) rightRel,
+                                kind,
+                                keyAliases,
+                                columns |> List.map (fun (p, c) -> p, c.Output)
+                            )
+                        Columns = columns |> List.map snd
+                        Params = b.Params @ rightParams
+                        Next = next }
+
     /// A `Join` onto a modelled table along a declared relation.
     let private join
         (d: Dialect)
@@ -510,19 +615,7 @@ module internal Lowering =
                 | Some t -> Ok t
                 | None -> Error(Refusal.OperandNotModelled(step, "'" + name + "'"))
 
-        let kindAdmitted =
-            match kind with
-            | Right
-            | Outer -> Error(Refusal.JoinKindNotLowered(step, kind))
-            | Inner
-            | Left
-            | Semi
-            | Anti ->
-                match d.Refuses(Construct.Join kind) with
-                | Some why -> Error(Refusal.DialectRefuses(step, Construct.Join kind, why))
-                | None -> Ok()
-
-        kindAdmitted
+        joinKindAdmitted d step kind
         |> Result.bind (fun () -> operand)
         |> Result.bind (fun (node, spec) ->
             let rightCols = Model.columns node
@@ -536,92 +629,154 @@ module internal Lowering =
                 match on |> List.tryFind (fun (_, r) -> Option.isNone (rightCol r)) with
                 | Some(_, r) -> Error(Refusal.UnknownColumn(step, r, rightCols |> List.map (fun (_, c) -> c.Name)))
                 | None ->
-                    let undeclared = Error(Refusal.UndeclaredJoin(step, spec.Name, on))
+                    let declared =
+                        leftTableOf b on
+                        |> Option.exists (fun (leftTable, pairs) ->
+                            declaredBetween
+                                model
+                                leftTable
+                                node.Id
+                                (pairs |> List.map (fun (l, r) -> l, (fst (rightCol r).Value).Id) |> Set.ofList))
 
-                    let origins =
-                        on
-                        |> List.map (fun (l, r) -> (tryCol l b.Columns).Value.Origin, fst (rightCol r).Value |> _.Id)
-
-                    if List.isEmpty on || origins |> List.exists (fun (o, _) -> Option.isNone o) then
-                        undeclared
+                    if not declared then
+                        Error(Refusal.UndeclaredJoin(step, spec.Name, on))
                     else
-                        let pairs = origins |> List.map (fun (o, r) -> o.Value, r)
+                        let rightRel, rightOut, next = scan node spec b.Next
+                        joinTo step b kind on (rightRel, rightOut, [], next))
 
-                        match pairs |> List.map (fun ((t, _), _) -> t) |> List.distinct with
-                        | [ leftTable ] ->
-                            let wanted = pairs |> List.map (fun ((_, l), r) -> l, r) |> Set.ofList
+    /// The planned steps of a grouped operand that keep at most one row per key of its last grouping:
+    /// that grouping's keys as the operand's output names them, followed through the projections after
+    /// it, or why the operand does not end in such a grouping (DECISIONS.md D16).
+    let private groupedKeys (planned: Transform list) : Result<string list, string> =
+        // Walked from the last step back: steps that keep at most one row per key may follow the
+        // grouping; any other step before the grouping is reached leaves the rows unkeyed.
+        let rec back (steps: Transform list) (after: Transform list) =
+            match steps with
+            | [] -> Error "it does not end in a grouping"
+            | t :: rest ->
+                match t with
+                | GroupBy(keys, _) -> Ok(keys, after)
+                | Filter _
+                | Project _ -> back rest (t :: after)
+                | Join _
+                | Derive _
+                | Window _
+                | Pivot _
+                | Unpivot _
+                | Sort _
+                | Distinct
+                | Limit _
+                | Union _
+                | Intersect _
+                | Except _
+                | Define _
+                | Fit _
+                | Predict _ -> Error "a step after its last grouping can change how many rows a key holds"
 
-                            let declared =
-                                Model.joins model
-                                |> List.exists (fun (_, j) ->
-                                    (j.Left = leftTable && j.Right = node.Id && Set.ofList j.On = wanted)
-                                    || (j.Left = node.Id
-                                        && j.Right = leftTable
-                                        && Set.ofList (j.On |> List.map (fun (a, c) -> c, a)) = wanted))
+        back (List.rev planned) []
+        |> Result.bind (fun (keys, after) ->
+            after
+            |> List.fold
+                (fun acc t ->
+                    acc
+                    |> Result.bind (fun (keys: string list) ->
+                        match t with
+                        | Project pairs ->
+                            // A key the projection drops leaves the rows unkeyed by what remains.
+                            let renamed =
+                                keys |> List.map (fun k -> pairs |> List.tryFind (fun (src, _) -> src = k))
 
-                            if not declared then
-                                undeclared
+                            if renamed |> List.forall Option.isSome then
+                                Ok(renamed |> List.map (fun p -> snd p.Value))
                             else
-                                match
-                                    on
-                                    |> List.tryFind (fun (l, r) ->
-                                        (tryCol l b.Columns).Value.Output.Type <> (snd (rightCol r).Value).Type)
-                                with
-                                | Some(l, r) ->
-                                    Error(
-                                        Refusal.Untyped(step, sprintf "join keys '%s' and '%s' are of two types" l r)
+                                Error "a projection after its grouping drops a grouping key"
+                        | _ -> Ok keys))
+                (Ok keys))
+
+    /// A `Join` onto a grouped operand (DECISIONS.md D16): the operand's pipeline over its one table
+    /// lowers in full as a derived table, and it ends in a grouping on exactly the keys the join reads,
+    /// so it holds at most one row per key and the join cannot fan out. Each right key is followed
+    /// through the operand's renames to its table's model column, so the relation is the model's.
+    let private operandJoin
+        (d: Dialect)
+        (model: ModelNode)
+        (lowerOperand: Built -> Transform list -> Built * int * Refusal option)
+        (step: int)
+        (b: Built)
+        (o: Operand, planned: Transform list)
+        (on: (string * string) list, kind: JoinKind)
+        : Result<Built, Refusal> =
+        let refuse (why: string) =
+            Error(Refusal.OperandNotLowered(step, o.Name, why))
+
+        joinKindAdmitted d step kind
+        |> Result.bind (fun () ->
+            match on |> List.tryFind (fun (l, _) -> Option.isNone (tryCol l b.Columns)) with
+            | Some(l, _) -> Error(Refusal.UnknownColumn(step, l, members b.Columns))
+            | None ->
+                match Model.tryTable o.Table model with
+                | None -> refuse (sprintf "its table '%s' is not a table of the model" o.Table)
+                | Some(node, spec) when List.isEmpty (Model.columns node) ->
+                    refuse (sprintf "its table '%s' has no columns" spec.Name)
+                | Some(node, spec) ->
+                    match planned |> List.tryFindIndex (fun t -> Option.isSome (Reads.operandOf t)) with
+                    | Some i -> refuse (sprintf "its step %d brings in a second source" (i + 1))
+                    | None ->
+                        let rel, cols, next = scan node spec b.Next
+
+                        let built, lowered, boundary =
+                            lowerOperand
+                                { Relation = rel
+                                  Columns = cols
+                                  Params = []
+                                  Next = next }
+                                planned
+
+                        match boundary with
+                        | Some r ->
+                            refuse (sprintf "its step %d does not lower (%s)" (lowered + 1) (Refusal.describe r))
+                        | None ->
+                            match groupedKeys planned with
+                            | Error why -> refuse why
+                            | Ok keys ->
+                                let rights = on |> List.map snd
+
+                                if Set.ofList keys <> Set.ofList rights then
+                                    refuse (
+                                        sprintf
+                                            "it is grouped on %s, not on the join's keys %s, so the join could fan out"
+                                            (String.concat ", " keys)
+                                            (String.concat ", " rights)
                                     )
-                                | None ->
-                                    let rightRel, rightOut, next = scan node spec b.Next
-                                    let leftNames = members b.Columns |> Set.ofList
-
-                                    let rightNamed =
-                                        rightOut
-                                        |> List.map (fun c ->
-                                            if Set.contains c.Output.Name leftNames then
-                                                { c with
-                                                    Output =
-                                                        { c.Output with
-                                                            Field =
-                                                                ColumnSpec.renameField
-                                                                    (c.Output.Name + "_right")
-                                                                    c.Output.Field } }
-                                            else
-                                                c)
-
-                                    let columns =
-                                        match kind with
-                                        | Semi
-                                        | Anti -> b.Columns |> List.map (fun c -> Pick.Left c.Output.Alias, c)
-                                        | Inner
-                                        | Left
-                                        | Right
-                                        | Outer ->
-                                            (b.Columns |> List.map (fun c -> Pick.Left c.Output.Alias, c))
-                                            @ (rightNamed |> List.map (fun c -> Pick.Right c.Output.Alias, c))
-
-                                    match repeated (columns |> List.map (fun (_, c) -> c.Output.Name)) with
-                                    | Some name -> Error(Refusal.RepeatedName(step, name))
+                                else
+                                    match rights |> List.tryFind (fun r -> Option.isNone (tryCol r built.Columns)) with
+                                    | Some r -> Error(Refusal.UnknownColumn(step, r, members built.Columns))
                                     | None ->
-                                        let keyAliases =
-                                            on
-                                            |> List.map (fun (l, r) ->
-                                                (tryCol l b.Columns).Value.Output.Alias,
-                                                (rightOut |> List.find (fun c -> c.Output.Name = r)).Output.Alias)
+                                        let rightOrigin (r: string) =
+                                            (tryCol r built.Columns).Value.Origin
+                                            |> Option.filter (fun (t, _) -> t = node.Id)
 
-                                        Ok
-                                            { b with
-                                                Relation =
-                                                    Relation.Join(
-                                                        b.Relation,
-                                                        rightRel,
-                                                        kind,
-                                                        keyAliases,
-                                                        columns |> List.map (fun (p, c) -> p, c.Output)
-                                                    )
-                                                Columns = columns |> List.map snd
-                                                Next = next }
-                        | _ -> undeclared)
+                                        let declared =
+                                            rights |> List.forall (rightOrigin >> Option.isSome)
+                                            && leftTableOf b on
+                                               |> Option.exists (fun (leftTable, pairs) ->
+                                                   declaredBetween
+                                                       model
+                                                       leftTable
+                                                       node.Id
+                                                       (pairs
+                                                        |> List.map (fun (l, r) -> l, snd (rightOrigin r).Value)
+                                                        |> Set.ofList))
+
+                                        if not declared then
+                                            Error(Refusal.UndeclaredJoin(step, spec.Name, on))
+                                        else
+                                            joinTo
+                                                step
+                                                b
+                                                kind
+                                                on
+                                                (built.Relation, built.Columns, built.Params, built.Next))
 
     /// Whether the reference evaluator types an aggregate over a column of this type without refusing.
     let private aggregateAdmits (fn: AggFn) (ty: ColumnType) : bool =
@@ -786,11 +941,14 @@ module internal Lowering =
                                 Params = b.Params @ [ Int(max 0 n), IntType; Int(max 0 offset), IntType ] })))
 
     /// Lower the planned steps onto the source's scan, one at a time, until one refuses. Answers the
-    /// statement built, how many planned steps it carries, and the refusal that stopped it.
-    let walk
+    /// statement built, how many planned steps it carries, and the refusal that stopped it. A join that
+    /// names one of `operands` (each with its planned pipeline) joins that grouped operand (DECISIONS.md
+    /// D16); an operand names none.
+    let rec walk
         (d: Dialect)
         (model: ModelNode)
         (env: Map<string, Cell>)
+        (operands: (Operand * Transform list) list)
         (start: Built)
         (planned: Transform list)
         : Built * int * Refusal option =
@@ -808,7 +966,15 @@ module internal Lowering =
                 match t with
                 | Filter p -> next (filter d step b p) rest
                 | Project pairs -> next (project step b pairs) rest
-                | Join(source, on, kind) -> next (join d model step b (source, on, kind)) rest
+                | Join(source, on, kind) ->
+                    let operand =
+                        match source with
+                        | Ref name -> operands |> List.tryFind (fun (o, _) -> o.Name = name)
+                        | Embedded _ -> None
+
+                    match operand with
+                    | Some o -> next (operandJoin d model (walk d model env []) step b o (on, kind)) rest
+                    | None -> next (join d model step b (source, on, kind)) rest
                 | GroupBy(keys, aggs) -> next (groupBy d step b (keys, aggs)) rest
                 | Sort keys ->
                     match rest with

@@ -15,6 +15,8 @@ type PlacementCase =
         Source: DataSource
         /// The pipeline, as written.
         Pipeline: Transform list
+        /// The grouped operands its joins may name (DECISIONS.md D16).
+        Operands: Operand list
         /// What it is evaluated under.
         Bindings: Bindings
         /// Every modelled table's rows, keyed and named by the model.
@@ -151,6 +153,35 @@ module PlacementLaws =
               rows |> List.map (fun (_, b, _) -> b)
               rows |> List.map (fun (_, _, c) -> c) ]
 
+    /// The grouped operands every case may join (DECISIONS.md D16): four that lower with their join (a
+    /// grouping on the relation's key with a count over a nullable column, one through a filter and a
+    /// rename of the key, and one over the dimension), and four that place the boundary (grouped on more
+    /// than the key, not grouped, a step that does not lower, a key the operand derives).
+    let operands: Operand list =
+        let op (name: string) (table: string) (pipeline: Transform list) =
+            { Name = name
+              Table = table
+              Pipeline = pipeline }
+
+        [ op
+              "req_touch"
+              "touches"
+              [ GroupBy([ "ref" ], [ agg "req_tn" Count "w"; agg "req_tmax" Max "w"; agg "req_tsum" Sum "w" ]) ]
+          op
+              "req_touch_kept"
+              "touches"
+              [ Filter(Binary(Gt, Col "w", Lit(Float 0.5)))
+                Project [ "ref", "req_order"; "w", "w" ]
+                GroupBy([ "req_order" ], [ agg "req_tn" Count "w" ]) ]
+          op "req_cust" "customers" [ GroupBy([ "id" ], [ agg "req_cn" Count "name"; agg "req_cmax" Max "amt" ]) ]
+          op "req_touch_wide" "touches" [ GroupBy([ "ref"; "w" ], [ agg "req_tn" Count "w" ]) ]
+          op "req_touch_raw" "touches" [ Filter(Not(IsNull(Col "w"))) ]
+          op "req_touch_mid" "touches" [ GroupBy([ "ref" ], [ agg "req_tmid" Median "w" ]) ]
+          op
+              "req_touch_derived"
+              "touches"
+              [ Derive("req_r", Col "ref"); GroupBy([ "req_r" ], [ agg "req_tn" Count "w" ]) ] ]
+
     /// The step templates a pipeline is drawn from. Each names what it is there to reach.
     let private templates (customers: Table) : Transform list list =
         let page key dir n offset = [ Sort [ key, dir ]; Limit(n, offset) ]
@@ -196,6 +227,21 @@ module PlacementLaws =
           [ Join(Ref "customers", [ "id", "id" ], Inner) ]
           [ Join(Ref "nowhere", [ "fk", "id" ], Inner) ]
           [ Join(Embedded customers, [ "fk", "id" ], Inner) ]
+          // joins to a grouped operand that lower, every kind, and the first consumer's attribution shape
+          [ Join(Ref "req_touch", [ "id", "ref" ], Left) ]
+          [ Join(Ref "req_touch", [ "id", "ref" ], Inner) ]
+          [ Join(Ref "req_touch_kept", [ "id", "req_order" ], Semi) ]
+          [ Join(Ref "req_touch", [ "id", "ref" ], Anti) ]
+          [ Join(Ref "req_touch", [ "id", "ref" ], Left)
+            GroupBy([ "s" ], [ agg "req_top" Max "req_tmax"; agg "req_u" CountDistinct "fk" ]) ]
+          // a count over a grouped operand's counts, nulls where the left join matched nothing
+          [ Join(Ref "req_cust", [ "fk", "id" ], Left)
+            GroupBy([ "b" ], [ agg "req_n" Count "req_cn"; agg "req_seen" Count "req_cmax" ]) ]
+          // joins to a grouped operand that place the boundary
+          [ Join(Ref "req_touch_wide", [ "id", "ref" ], Left) ]
+          [ Join(Ref "req_touch_raw", [ "id", "ref" ], Left) ]
+          [ Join(Ref "req_touch_mid", [ "id", "ref" ], Inner) ]
+          [ Join(Ref "req_touch_derived", [ "id", "req_r" ], Left) ]
           // groupings
           [ GroupBy([ "s" ], [ agg "req_n" Count "id"; agg "req_total" Sum "amt" ]) ]
           [ GroupBy([], [ agg "req_n" Count "id"; agg "req_last_day" Max "d" ]) ]
@@ -371,6 +417,7 @@ module PlacementLaws =
         { Model = model
           Source = source
           Pipeline = steps
+          Operands = operands
           Bindings = bindings
           Tables = tables },
         r.Value
@@ -386,27 +433,37 @@ module PlacementLaws =
 
     // ---- the two placements ----
 
-    /// The reference: the whole pipeline as written, over the source's rows.
+    /// The reference: the whole pipeline as written, over the source's rows, a join to a grouped operand
+    /// reading the operand's pipeline as written over its table.
     let reference (c: PlacementCase) : Result<Table, EvalError> =
-        let resolve (name: string) =
+        let tables (name: string) =
             match Map.tryFind name c.Tables with
             | Some t -> Ok t
             | None -> Error(UnresolvedSource name)
 
-        let pipeline =
-            let listed = Transform.substituteListParams c.Bindings.Lists c.Pipeline
+        let substituted (steps: Transform list) =
+            let listed = Transform.substituteListParams c.Bindings.Lists steps
 
             match c.Bindings.Clock with
             | Some clk -> Transform.substituteNow clk listed
             | None -> listed
 
+        let resolve =
+            Operand.resolver
+                c.Bindings.Params
+                (c.Operands
+                 |> List.map (fun o ->
+                     { o with
+                         Pipeline = substituted o.Pipeline }))
+                tables
+
         let input =
             match c.Source with
             | Embedded t -> Ok t
-            | Ref name -> resolve name
+            | Ref name -> tables name
 
         input
-        |> Result.bind (DataFrame.evalPipelineWithInEnvAsWritten resolve c.Bindings.Params pipeline)
+        |> Result.bind (DataFrame.evalPipelineWithInEnvAsWritten resolve c.Bindings.Params (substituted c.Pipeline))
 
     /// What a placement answered: the table or the refusal it reported, or why it could not finish.
     type Placed =
@@ -560,6 +617,73 @@ module PlacementLaws =
         | Relation.Ordered(input, _, _, _) -> groupsByDerivedKey input
         | Relation.Join(left, right, _, _, _) -> groupsByDerivedKey left || groupsByDerivedKey right
 
+    /// Is the relation a grouping, under any filter or projection of it: the form a grouped operand
+    /// lowers to (DECISIONS.md D16)?
+    let rec private grouped (r: Relation) : bool =
+        match r with
+        | Relation.Aggregate _ -> true
+        | Relation.Where(input, _)
+        | Relation.Select(input, _) -> grouped input
+        | Relation.Scan _
+        | Relation.Derive _
+        | Relation.Join _
+        | Relation.Ordered _ -> false
+
+    /// The kind of every join in the statement whose right side is a grouping: a grouped operand that
+    /// lowered with its join.
+    let rec private groupedJoins (r: Relation) : JoinKind list =
+        match r with
+        | Relation.Scan _ -> []
+        | Relation.Join(left, right, kind, _, _) ->
+            (if grouped right then [ kind ] else [])
+            @ groupedJoins left
+            @ groupedJoins right
+        | Relation.Where(input, _)
+        | Relation.Select(input, _)
+        | Relation.Derive(input, _)
+        | Relation.Aggregate(input, _, _, _)
+        | Relation.Ordered(input, _, _, _) -> groupedJoins input
+
+    /// Does a left join feed the relation?
+    let rec private leftJoined (r: Relation) : bool =
+        match r with
+        | Relation.Scan _ -> false
+        | Relation.Join(left, right, kind, _, _) -> kind = Left || leftJoined left || leftJoined right
+        | Relation.Where(input, _)
+        | Relation.Select(input, _)
+        | Relation.Derive(input, _)
+        | Relation.Aggregate(input, _, _, _)
+        | Relation.Ordered(input, _, _, _) -> leftJoined input
+
+    /// Where the statement counts: every grouping carrying a `Count`, one fed by a left join, and one
+    /// inside a grouped operand.
+    let rec private countsIn (r: Relation) : string list =
+        match r with
+        | Relation.Scan _ -> []
+        | Relation.Aggregate(input, _, aggregates, _) ->
+            (if aggregates |> List.exists (fun (fn, _, _) -> fn = Count) then
+                 "count lowered"
+                 :: (if leftJoined input then
+                         [ "count after a left join" ]
+                     else
+                         [])
+             else
+                 [])
+            @ countsIn input
+        | Relation.Join(left, right, _, _, _) ->
+            let inside = countsIn right
+
+            (if List.contains "count lowered" inside then
+                 [ "count inside a grouped operand" ]
+             else
+                 [])
+            @ inside
+            @ countsIn left
+        | Relation.Where(input, _)
+        | Relation.Select(input, _)
+        | Relation.Derive(input, _)
+        | Relation.Ordered(input, _, _, _) -> countsIn input
+
     /// The laws, over `iterations` cases drawn from `seed`, with `dialect` lowering and `execute`
     /// running its statements.
     let laws (dialect: Dialect) (execute: Executor) (seed: int) (iterations: int) : LawResult list =
@@ -581,6 +705,10 @@ module PlacementLaws =
         let parityR: string option ref = ref None
         let derivedKeyR: string option ref = ref None
         let derivedKeys = System.Collections.Generic.Dictionary<string, int>()
+        let operandR: string option ref = ref None
+        let operandJoins = System.Collections.Generic.Dictionary<string, int>()
+        let countR: string option ref = ref None
+        let countSites = System.Collections.Generic.Dictionary<string, int>()
         let requestR: string option ref = ref None
         let coherentR: string option ref = ref None
         let purityR: string option ref = ref None
@@ -596,7 +724,10 @@ module PlacementLaws =
                 with ex ->
                     Error ex.Message
 
-            match attempt (fun () -> FoldSplit.lowerUnchecked c.Model dialect c.Source c.Pipeline c.Bindings None) with
+            match
+                attempt (fun () ->
+                    FoldSplit.lowerUnchecked c.Model dialect c.Operands c.Source c.Pipeline c.Bindings None)
+            with
             | Error m -> note totalityR (sprintf "%s: the provider threw: %s" at m)
             | Ok(Error whole) ->
                 bump refusals (Refusal.tag whole)
@@ -666,7 +797,7 @@ module PlacementLaws =
                 | None -> ()
 
                 if
-                    FoldSplit.lowerUnchecked c.Model dialect c.Source c.Pipeline c.Bindings None
+                    FoldSplit.lowerUnchecked c.Model dialect c.Operands c.Source c.Pipeline c.Bindings None
                     <> Ok lowered
                 then
                     note purityR (sprintf "%s: lowering twice answered two statements" at)
@@ -699,6 +830,37 @@ module PlacementLaws =
                                 derivedKeyR
                                 (sprintf
                                     "%s: the statement grouping by a derived key answered %A; the reference, grouping by the expression, %A (pipeline=%A)"
+                                    at
+                                    split'
+                                    whole
+                                    c.Pipeline)
+
+                    match groupedJoins lowered.Statement.Form with
+                    | [] -> ()
+                    | kinds ->
+                        kinds
+                        |> List.iter (fun k -> bump operandJoins (sprintf "grouped operand join %A" k))
+
+                        if not agree then
+                            note
+                                operandR
+                                (sprintf
+                                    "%s: the statement joining a grouped operand answered %A; the reference, joining the operand's pipeline, %A (pipeline=%A)"
+                                    at
+                                    split'
+                                    whole
+                                    c.Pipeline)
+
+                    match countsIn lowered.Statement.Form with
+                    | [] -> ()
+                    | sites ->
+                        sites |> List.distinct |> List.iter (bump countSites)
+
+                        if not agree then
+                            note
+                                countR
+                                (sprintf
+                                    "%s: the statement's count answered %A; the reference's, %A (pipeline=%A)"
                                     at
                                     split'
                                     whole
@@ -753,6 +915,16 @@ module PlacementLaws =
               derivedKeyR.Value
           LawResult.subject
               family
+              "a join to a grouped operand on the relation's keys equals the reference's join to the operand's pipeline"
+              iterations
+              operandR.Value
+          LawResult.subject
+              family
+              "a lowered Count equals the reference's: nulls uncounted, an all-null group 0, a null key one group"
+              iterations
+              countR.Value
+          LawResult.subject
+              family
               "every statement is built from the model and its parameters alone: no request text"
               iterations
               requestR.Value
@@ -793,6 +965,21 @@ module PlacementLaws =
               "derived grouping key"
               seed
               (counts derivedKeys [ "groupBy over a derived key" ])
+          SampleAdequacy.reached
+              family
+              "grouped operand join"
+              seed
+              (counts
+                  operandJoins
+                  [ "grouped operand join Inner"
+                    "grouped operand join Left"
+                    "grouped operand join Semi"
+                    "grouped operand join Anti" ])
+          SampleAdequacy.reached
+              family
+              "count"
+              seed
+              (counts countSites [ "count lowered"; "count after a left join"; "count inside a grouped operand" ])
           SampleAdequacy.reached
               family
               "side of the split"

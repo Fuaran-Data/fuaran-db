@@ -47,6 +47,8 @@ type Fixture =
         /// The construct the fixture exists to reach, where it exists to reach one: a dialect that
         /// refuses it places the boundary there.
         Reaches: Construct option
+        /// The grouped operands its joins name (DECISIONS.md D16), each over a table of the seed.
+        Operands: Operand list
     }
 
 /// The seed and the fixtures: the stated subset a dialect is certified on (`validator:Fuaran.DB.Conformance`).
@@ -319,7 +321,8 @@ module Fixtures =
           Bindings = bindings
           Ordered = false
           Pins = []
-          Reaches = None }
+          Reaches = None
+          Operands = [] }
 
     let private ordered (id: string) (description: string) (pipeline: Transform list) : Fixture =
         { fixture id description "orders" [] with
@@ -681,5 +684,173 @@ module Fixtures =
                       agg "stating" Sum "stated" ]
                 ) ] ]
 
+    /// A grouped operand (DECISIONS.md D16).
+    let private operand (name: string) (table: string) (pipeline: Transform list) : Operand =
+        { Name = name
+          Table = table
+          Pipeline = pipeline }
+
+    /// The joins to a grouped operand (DECISIONS.md D16): each kind, a key renamed inside the operand, a
+    /// filter before its grouping, the first consumer's attribution shape (a left join to one row per
+    /// key, then a roll-up with a sum and a distinct count), and an operand grouped on more than the key,
+    /// which places the boundary and runs locally.
+    let grouped: Fixture list =
+        let perCustomer =
+            operand
+                "orders_per_customer"
+                "orders"
+                [ GroupBy(
+                      [ "cust" ],
+                      [ agg "spend" Sum "amount"
+                        agg "priced" Count "price"
+                        agg "last_channel" Max "channel" ]
+                  ) ]
+
+        let joined
+            (id: string)
+            (description: string)
+            (o: Operand)
+            (on: string * string)
+            (kind: JoinKind)
+            (rest: Transform list)
+            =
+            { fixture id description "customers" ([ Join(Ref o.Name, [ on ], kind) ] @ rest) with
+                Operands = [ o ] }
+
+        [ joined
+              "operand-left"
+              "customers left-joined to their orders grouped on the customer key: one row per customer, a customer with no orders kept with nulls"
+              perCustomer
+              ("id", "cust")
+              Left
+              []
+          joined
+              "operand-inner"
+              "customers inner-joined to their orders grouped on the customer key"
+              perCustomer
+              ("id", "cust")
+              Inner
+              []
+          joined
+              "operand-semi"
+              "customers holding an order of more than 5, through an operand filtered before its grouping"
+              (operand
+                  "large_orders"
+                  "orders"
+                  [ Filter(gt (Col "amount") (Lit(dec "5")))
+                    GroupBy([ "cust" ], [ agg "n" Count "id" ]) ])
+              ("id", "cust")
+              Semi
+              []
+          joined
+              "operand-anti"
+              "customers holding no order of more than 5"
+              (operand
+                  "large_orders"
+                  "orders"
+                  [ Filter(gt (Col "amount") (Lit(dec "5")))
+                    GroupBy([ "cust" ], [ agg "n" Count "id" ]) ])
+              ("id", "cust")
+              Anti
+              []
+          joined
+              "operand-renamed-key"
+              "an operand that renames its key before grouping: the key is followed to the relation's column"
+              (operand
+                  "spend_per_buyer"
+                  "orders"
+                  [ Project [ "cust", "buyer"; "amount", "amount" ]
+                    GroupBy([ "buyer" ], [ agg "spend" Sum "amount" ]) ])
+              ("id", "buyer")
+              Left
+              []
+          joined
+              "operand-grouped-wide"
+              "an operand grouped on the key and a second column, which could fan out: the join runs locally"
+              (operand "per_customer_channel" "orders" [ GroupBy([ "cust"; "channel" ], [ agg "n" Count "id" ]) ])
+              ("id", "cust")
+              Left
+              []
+          { fixture
+                "operand-attribution-rollup"
+                "the first consumer's attribution shape: each order left-joined to one attribute row per key, the most of each attribute, then rolled up by an attribute with a summed decimal and a distinct count"
+                "orders"
+                [ Join(Ref "customer_attributes", [ "cust", "id" ], Left)
+                  GroupBy([ "tier" ], [ agg "spend" Sum "amount"; agg "customers" CountDistinct "cust" ]) ] with
+              Operands =
+                  [ operand
+                        "customer_attributes"
+                        "customers"
+                        [ GroupBy([ "id" ], [ agg "tier" Max "tier"; agg "name" Max "name" ]) ] ] } ]
+
+    /// `Count` against the reference on every null shape (DECISIONS.md D16): a group whose values are all
+    /// null, a mixed group, no input at all with and without keys, nulls in a grouping key, the rows
+    /// a left join leaves unmatched, a count of rows beside a count of values, and a distinct count
+    /// past a null.
+    let counts: Fixture list =
+        let one = Derive("one", int 1)
+
+        [ fixture
+              "count-all-null-group"
+              "a count of values in a group whose values are all null is 0"
+              "orders"
+              [ GroupBy([ "channel" ], [ agg "priced" Count "price" ]) ]
+          fixture
+              "count-mixed-group"
+              "a count of values counts the present ones, for a decimal, a boolean and an integer column"
+              "orders"
+              [ GroupBy(
+                    [ "channel" ],
+                    [ agg "stated" Count "amount"
+                      agg "flagged" Count "flag"
+                      agg "with_id" Count "id" ]
+                ) ]
+          fixture
+              "count-rows-and-values"
+              "a count of rows, as a count of a derived constant, beside a count of the values a column states"
+              "orders"
+              [ one; GroupBy([], [ agg "orders" Count "one"; agg "stating" Count "amount" ]) ]
+          fixture
+              "count-empty-keyed"
+              "a count grouped over no rows answers no groups"
+              "orders"
+              [ Filter(gt (Col "id") (int 100))
+                GroupBy([ "channel" ], [ agg "n" Count "amount" ]) ]
+          fixture
+              "count-empty-keyless"
+              "a count over no rows with no key answers no row"
+              "orders"
+              [ Filter(gt (Col "id") (int 100)); GroupBy([], [ agg "n" Count "amount" ]) ]
+          fixture
+              "count-null-key"
+              "nulls in a grouping key form one group, and its counts are counted like any other"
+              "orders"
+              [ one
+                GroupBy([ "cust" ], [ agg "rows" Count "one"; agg "stated" Count "amount" ]) ]
+          fixture
+              "count-after-left-join"
+              "a count over the columns a left join leaves null for a customer with no orders is 0"
+              "customers"
+              [ Join(Ref "orders", [ "id", "cust" ], Left)
+                GroupBy([ "id" ], [ agg "orders" Count "id_right"; agg "stated" Count "amount" ]) ]
+          { fixture
+                "count-operand-after-left-join"
+                "a grouped operand's counts after a left join: null for the customer it does not match, and a count of them skips it"
+                "customers"
+                [ Join(Ref "orders_per_customer", [ "id", "cust" ], Left)
+                  GroupBy(
+                      [],
+                      [ agg "matched" Count "priced"
+                        agg "priced" Sum "priced"
+                        agg "customers" Count "id" ]
+                  ) ] with
+              Operands =
+                  [ operand "orders_per_customer" "orders" [ GroupBy([ "cust" ], [ agg "priced" Count "price" ]) ] ] }
+          fixture
+              "count-distinct-null"
+              "a distinct count skips a null"
+              "orders"
+              [ GroupBy([], [ agg "channels" CountDistinct "channel" ]) ] ]
+
     /// Every fixture of the kit.
-    let all: Fixture list = subset @ differences @ refusals @ derives
+    let all: Fixture list = subset @ differences @ refusals @ derives @ grouped @ counts

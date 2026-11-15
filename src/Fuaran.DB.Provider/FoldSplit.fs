@@ -16,6 +16,18 @@ type Bindings =
         Clock: ClockWitness option
     }
 
+/// A grouped operand as the split planned it (DECISIONS.md D16).
+type OperandPlan =
+    {
+        /// The name its join gives it.
+        Name: string
+        /// The model name of its table.
+        Table: string
+        /// The compute planner's report over its pipeline as admitted and bound: a row policy on its
+        /// table is its first step, before its grouping.
+        Plan: PlanReport
+    }
+
 /// What the fold split decided, and why (`explain`).
 type SplitReport =
     {
@@ -26,6 +38,8 @@ type SplitReport =
         Lowered: int
         /// The rule that placed the boundary at step `Lowered + 1`, or `None` when every step lowered.
         Boundary: Refusal option
+        /// Each grouped operand the pipeline's joins name, as planned.
+        Operands: OperandPlan list
     }
 
 /// A lowered pipeline: the statement for the prefix, the planned steps after it, and the report.
@@ -37,6 +51,8 @@ type Lowered =
         Suffix: Transform list
         /// What was decided, and why.
         Split: SplitReport
+        /// The grouped operands, bound: what a join to one in the suffix reads, by the reference.
+        Operands: Operand list
     }
 
 /// Bindings with nothing bound.
@@ -95,6 +111,7 @@ module FoldSplit =
     let internal lowerUnchecked
         (model: ModelNode)
         (dialect: Dialect)
+        (operands: Operand list)
         (source: DataSource)
         (pipeline: Transform list)
         (bindings: Bindings)
@@ -104,6 +121,22 @@ module FoldSplit =
         |> Result.map (fun (node, spec) ->
             let bound = bind bindings pipeline
             let report = Plan.explain (Model.schemaOf node) bound
+
+            // Each operand is bound and planned over its own table's schema, as a pipeline is.
+            let operands =
+                operands
+                |> List.map (fun o ->
+                    let o =
+                        { o with
+                            Pipeline = bind bindings o.Pipeline }
+
+                    let schema =
+                        Model.tryTable o.Table model
+                        |> Option.map (fst >> Model.schemaOf)
+                        |> Option.defaultValue []
+
+                    o, Plan.explain schema o.Pipeline)
+
             let relation, columns, next = Lowering.scan node spec 1
 
             let built, lowered, boundary =
@@ -111,6 +144,7 @@ module FoldSplit =
                     dialect
                     model
                     bindings.Params
+                    (operands |> List.map (fun (o, plan) -> o, plan.Planned))
                     { Relation = relation
                       Columns = columns
                       Params = []
@@ -136,16 +170,31 @@ module FoldSplit =
               Split =
                 { Plan = report
                   Lowered = lowered
-                  Boundary = boundary } })
+                  Boundary = boundary
+                  Operands =
+                    operands
+                    |> List.map (fun (o, plan) ->
+                        { Name = o.Name
+                          Table = o.Table
+                          Plan = plan }) }
+              Operands = operands |> List.map fst })
 
     /// Lower an ADMITTED pipeline through `dialect`: the pipeline the policy rewrote, over its source,
-    /// against its model, the statement carrying the admitted timeout. A pipeline reaches a statement
-    /// only through `Policy.admit`, so an ungated read is not expressible (DECISIONS.md D5). `Error`
-    /// only when no statement can be written at all (the source is embedded, unmodelled, or has no
-    /// columns); otherwise the statement for the longest lowerable prefix of the planned pipeline, the
-    /// steps left to run locally, and the rule that stopped the prefix.
+    /// against its model, with the grouped operands it admitted, the statement carrying the admitted
+    /// timeout. A pipeline reaches a statement only through `Policy.admit` or `Policy.admitWith`, so an
+    /// ungated read is not expressible (DECISIONS.md D5). `Error` only when no statement can be written
+    /// at all (the source is embedded, unmodelled, or has no columns); otherwise the statement for the
+    /// longest lowerable prefix of the planned pipeline, the steps left to run locally, and the rule that
+    /// stopped the prefix.
     let lower (admitted: Admitted) (dialect: Dialect) (bindings: Bindings) : Result<Lowered, Refusal> =
-        lowerUnchecked admitted.Model dialect admitted.Source admitted.Pipeline bindings (Some admitted.TimeoutSeconds)
+        lowerUnchecked
+            admitted.Model
+            dialect
+            admitted.Operands
+            admitted.Source
+            admitted.Pipeline
+            bindings
+            (Some admitted.TimeoutSeconds)
 
     /// The split alone: where the boundary falls in the admitted pipeline as planned, and the rule
     /// that put it there.
@@ -163,8 +212,22 @@ module FoldSplit =
             | Derive(name, _) -> Some(i + 1, name)
             | _ -> None)
 
-    /// The split as sentences: what the planner rewrote, which steps lower, each derive that lowered,
-    /// and where the boundary fell and why.
+    /// The grouped operands joined in the statement: each lowered join's step (from 1, in the planned
+    /// pipeline) and the operand's plan (DECISIONS.md D16).
+    let joinedOperands (report: SplitReport) : (int * OperandPlan) list =
+        report.Plan.Planned
+        |> List.truncate report.Lowered
+        |> List.indexed
+        |> List.choose (fun (i, t) ->
+            match t with
+            | Join(Ref name, _, _) ->
+                report.Operands
+                |> List.tryFind (fun o -> o.Name = name)
+                |> Option.map (fun o -> i + 1, o)
+            | _ -> None)
+
+    /// The split as sentences: what the planner rewrote, which steps lower, each derive and each grouped
+    /// operand that lowered, and where the boundary fell and why.
     let describe (report: SplitReport) : string list =
         let planned = List.length report.Plan.Planned
 
@@ -193,15 +256,34 @@ module FoldSplit =
                     step
                     name)
 
-        rewrites @ [ lowered ] @ derives @ boundary
+        let operands =
+            joinedOperands report
+            |> List.map (fun (step, o) ->
+                sprintf
+                    "step %d joins the grouped operand '%s' as a derived table: its %d planned step(s) over table '%s' lower inside it, %s first"
+                    step
+                    o.Name
+                    (List.length o.Plan.Planned)
+                    o.Table
+                    (match o.Plan.Planned with
+                     | Filter _ :: _ -> "a filter"
+                     | _ -> "no filter"))
+
+        rewrites @ [ lowered ] @ derives @ operands @ boundary
 
     /// Run the suffix over the statement's result, in the reference evaluator, under the same
     /// bindings — the second half of the placement. The suffix is already bound, so the clock it
-    /// was pinned with is the one the statement was lowered under.
+    /// was pinned with is the one the statement was lowered under. A join in the suffix to a grouped
+    /// operand reads the operand as the reference does: its pipeline over its table, read through
+    /// `resolve`.
     let finish
         (lowered: Lowered)
         (resolve: string -> Result<Table, EvalError>)
         (bindings: Bindings)
         (result: Table)
         : Result<Table, EvalError> =
-        DataFrame.evalPipelineWithInEnv resolve bindings.Params lowered.Suffix result
+        DataFrame.evalPipelineWithInEnv
+            (Operand.resolver bindings.Params lowered.Operands resolve)
+            bindings.Params
+            lowered.Suffix
+            result
