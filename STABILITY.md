@@ -1,9 +1,9 @@
 # Fuaran.DB — API stability
 
 **Status:** pre-release, on the `0.x` line. The package version is single-sourced from `<Version>` in
-`Directory.Build.props` (which `pack.ps1` reads). 0.1.0 and 0.2.0 are tagged and published on nuget.org, so each
-names one contract and is never repacked. The standing version is the one headed DRAFT below: untagged and pinned by
-no public consumer, it is a **draft slot**, which an additive change rides and a change of a higher class
+`Directory.Build.props` (which `pack.ps1` reads). 0.1.0, 0.2.0 and 0.3.0 are tagged and published on nuget.org, so each
+names one contract and is never repacked. A version headed DRAFT below, when there is one, is untagged and pinned by
+no public consumer: it is a **draft slot**, which an additive change rides and a change of a higher class
 advances.
 
 ## Versioning policy
@@ -82,12 +82,12 @@ public feed, names one contract and is never repacked: a change after that point
 
 ## Versions
 
-### 0.3.0 — DRAFT
+### 0.3.0
 
 A recording session admits and records a request's grouped operands (Phase 36, DECISIONS.md D17). 0.2.0 is
 tagged, so the change cannot ride it, and closed unions' cases gain fields, so on the `0.x` line it advances the
 minor. Built against the same line as 0.2.0, `Fuaran.Core.*` 0.42.0 and `Fuaran.Compute.DataFrame` 0.44.0.
-Untagged: the tag and the publish are a separate act.
+Tagged `v0.3.0` and published on nuget.org.
 
 - **Breaking — two `SessionOp` cases gain a field**: `Received` gains `operands` (before `at`) and `Admitted`
   gains `operands` (last), each an `OperandRecord list`. Every pattern and construction of either case stops
