@@ -1,8 +1,8 @@
 # Fuaran.DB — API stability
 
 **Status:** pre-release, on the `0.x` line. The package version is single-sourced from `<Version>` in
-`Directory.Build.props` (which `pack.ps1` reads). 0.1.0 is tagged and published on nuget.org, so it names one
-contract and is never repacked. The standing version is the one headed DRAFT below: untagged and pinned by
+`Directory.Build.props` (which `pack.ps1` reads). 0.1.0 and 0.2.0 are tagged and published on nuget.org, so each
+names one contract and is never repacked. The standing version is the one headed DRAFT below: untagged and pinned by
 no public consumer, it is a **draft slot**, which an additive change rides and a change of a higher class
 advances.
 
@@ -28,7 +28,7 @@ public feed, names one contract and is never repacked: a change after that point
   `PlacementCase`, `TableProbe`, `Probe`, `ProbeRefusal`, and the functions of `Relation`, `Statement`,
   `Render`, `Refusal`, `Bindings`, `FoldSplit`, `PlacementLaws` and `Probe`. Every package in the repository is cut at the one version.
 - **The public F# surface of `Fuaran.DB.Session`**: `ResultDigest`, `SessionHeader`, `StatementRecord`,
-  `WithheldPart`, `SessionOp`, `SchemaEntry`, `Guard`, `Verdict`, `Split`, `Recorded`, `Outcome`,
+  `WithheldPart`, `OperandRecord`, `SessionOp`, `SchemaEntry`, `Guard`, `Verdict`, `Split`, `Recorded`, `Outcome`,
   `RequestRecord`, `SessionState`, `SessionRejection`, `StatementIdentity`, `SessionReadFault`, `Execute`,
   `RunFailure`, `Session`, `Account`, `ReplayVerdict`, `Signer`, `SignedSession`, and the functions of
   `SessionOps`, `SessionHash`, `Recording`, `SessionWire`, `Session`, `Export` and `StreamLaws`.
@@ -81,6 +81,37 @@ public feed, names one contract and is never repacked: a change after that point
   to the text a form renders to is classed with the form's own changes.
 
 ## Versions
+
+### 0.3.0 — DRAFT
+
+A recording session admits and records a request's grouped operands (Phase 36, DECISIONS.md D17). 0.2.0 is
+tagged, so the change cannot ride it, and closed unions' cases gain fields, so on the `0.x` line it advances the
+minor. Built against the same line as 0.2.0, `Fuaran.Core.*` 0.42.0 and `Fuaran.Compute.DataFrame` 0.44.0.
+Untagged: the tag and the publish are a separate act.
+
+- **Breaking — two `SessionOp` cases gain a field**: `Received` gains `operands` (before `at`) and `Admitted`
+  gains `operands` (last), each an `OperandRecord list`. Every pattern and construction of either case stops
+  compiling. **`Verdict.Admitted` gains `operands`** (last) for the same reason.
+- **Breaking — `SessionRejection` gains `OperandMismatch`** (`DB-SESSION-OPERAND-MISMATCH`): the reducer refuses
+  operands that are not exactly those the pipeline's joins name, in join order, each on its received table.
+- **Breaking — two records gain a field**: `RequestRecord.Operands` and `Account.Operands`, so a full-literal
+  construction stops compiling.
+- **Additive — `OperandRecord`** (a name, a table, a pipeline, a redaction count), **`Session.requestWith`**, which
+  admits through `Policy.admitWith`, **`SessionOps.joined`** (the operands a pipeline's joins name) and
+  **`StreamLaws.operandLaw`**, which `StreamLaws.laws` now answers last; read laws by name, not by position.
+  `Session.request` keeps its signature and is `requestWith` with no operand.
+- **The record, unchanged for a request with no operand**: the ops `Session.request` appends, and their bytes, are
+  what 0.2.0 appended (the provider version in `Opened` and in each statement's hash is the package's own, as on
+  every release). The recording rule is unchanged and covers the operands (D17.3): an unrecordable request
+  records its operands' literals withheld, and a refused request always does.
+- **The session wire, extended (D17.5)**: `received` and `admitted` carry an optional `operands` member, written
+  only when there is an operand. A 0.2.0 stream reads unchanged and every existing vector keeps its bytes; an
+  empty `operands` array is refused; a 0.2.0 reader refuses a stream that records an operand.
+  `wire-fixtures/session/streams/operand.jsonl` is added. The in-toto predicate type stays `db-session/v0.1`
+  (D17.6).
+- **Replay (D17.7)**: a finished request whose recorded local suffix joins a grouped operand replays as
+  `NotCaptured`, naming the operand, where it would have been `Unevaluable`.
+- **The conformance set**: every emitted file is re-stamped with the kit version, 0.3.0. No fixture content moves.
 
 ### 0.2.0
 
