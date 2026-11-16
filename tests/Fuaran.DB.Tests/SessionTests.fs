@@ -260,6 +260,94 @@ let measuredModel: ModelNode =
 let measured () =
     drive measuredModel (engine measuredModel (ref 0))
 
+// ---- a request joining a grouped operand (Phase 36) ----
+
+/// The worked model with the relation from an order to its customer declared, so a customer can be
+/// left-joined to a grouped operand over orders on the customer key.
+let operandModelWith (recordable: string list) : ModelNode =
+    let m = modelWith recordable "personal"
+
+    { m with
+        Children =
+            m.Children
+            @ [ leaf
+                    "j:orders-customers"
+                    (NodeKind.Join
+                        { Name = "order customer"
+                          Left = "t:orders"
+                          Right = "t:customers"
+                          On = [ "c:orders.customer_id", "c:customers.customer_id" ] }) ] }
+
+/// One row per customer: the largest order over a threshold, written as a literal.
+let spend: Operand =
+    { Name = "spend"
+      Table = "orders"
+      Pipeline =
+        [ Filter(Binary(Gt, Col "amount", Lit(Int 1)))
+          GroupBy(
+              [ "customer_id" ],
+              [ { Name = "top"
+                  Fn = Max
+                  Of = "amount" } ]
+          ) ] }
+
+/// Each customer's key, left-joined to its largest order: reads only public columns.
+let operandPipeline: Transform list =
+    [ Project [ "customer_id", "customer_id" ]
+      Join(Ref "spend", [ "customer_id", "customer_id" ], Left)
+      Sort [ Slot.Lit "customer_id", Asc ]
+      Limit(Slot.Lit 100, Slot.Lit 0) ]
+
+/// A source table by model name, as the host's resolver answers it.
+let private resolveHeld (name: string) : Result<Table, EvalError> =
+    match Map.tryFind name held with
+    | Some t -> Ok t
+    | None -> Error(EvalError.UnresolvedSource name)
+
+/// A session over `m` that admits, lowers and runs one request joining `spend`.
+let operandSession (m: ModelNode) (subject: Subject) (pipeline: Transform list) : Session * Result<Table, RunFailure> =
+    let now = clock ()
+
+    let s0 =
+        Session.start actor m ReferenceDialect.dialect "1.0" "session-operand" "a-secret-the-host-keeps" (now ())
+        |> ok "start"
+
+    let s1, verdict =
+        s0
+        |> Session.requestWith "q1" subject "customers" [ spend ] pipeline (now ())
+        |> ok "request"
+
+    match verdict with
+    | Error r -> failtestf "refused: %s" (Policy.describe r)
+    | Ok _ ->
+        let s2, _ = s1 |> Session.lower "q1" Bindings.none (now ()) |> ok "lower"
+
+        s2
+        |> Session.run "q1" (engine m (ref 0)) now resolveHeld Bindings.none
+        |> ok "run"
+
+/// A subject granted public columns in aggregate only: the operand's filter reads an order's amount
+/// row by row, so the request is refused inside the operand.
+let private aggregateOnly: Subject =
+    { analyst with
+        Principal = "aggregator"
+        Grants =
+            [ { Classification = "public"
+                Level = GrantLevel.Aggregate } ] }
+
+/// The operand session as a stream: the request admitted and run, then the same request by a subject
+/// not granted the operand's rows, refused.
+let operandStream () : Session =
+    let m = operandModelWith [ "public" ]
+    let s, _ = operandSession m analyst operandPipeline
+
+    let s', _ =
+        s
+        |> Session.requestWith "q2" aggregateOnly "customers" [ spend ] operandPipeline "2026-10-11T10:00:59Z"
+        |> ok "request q2"
+
+    s'
+
 let private seed = 19030
 let private iterations = 300
 
@@ -616,7 +704,7 @@ let tests =
               Expect.equal (fst a.Pipeline) (publicPipeline 10) "the pipeline, verbatim: q1 is recordable"
 
               match a.Verdict with
-              | Some(Verdict.Admitted("analyst", reads, rules, _, 0)) ->
+              | Some(Verdict.Admitted("analyst", reads, rules, _, 0, [])) ->
                   Expect.equal reads [ "public" ] "what it read"
 
                   Expect.isTrue
@@ -699,8 +787,8 @@ let tests =
 
               let withQ3x =
                   SessionOps.applyAll
-                      [ SessionOp.Received("q3x", "orders", [], 0, "t")
-                        SessionOp.Admitted("q3x", "p", [ "public" ], [], [], 0)
+                      [ SessionOp.Received("q3x", "orders", [], 0, [], "t")
+                        SessionOp.Admitted("q3x", "p", [ "public" ], [], [], 0, [])
                         SessionOp.Lowered("q3x", 0, [], 0, None) ]
                       s.State
                   |> ok "q3x"
@@ -924,7 +1012,247 @@ let tests =
 
               match Session.replay state "q1" with
               | ReplayVerdict.Reached _ -> ()
-              | other -> failtestf "q1: %A" other ]
+              | other -> failtestf "q1: %A" other
+
+          testCase
+              "a request joining a grouped operand is admitted, lowers to one statement, runs, and its account names the operand, its table and the rules inside it"
+          <| fun _ ->
+              let m = operandModelWith [ "public" ]
+              let s, final = operandSession m analyst operandPipeline
+
+              match final with
+              | Ok t ->
+                  Expect.equal (Table.rowCount t) 2 "one row per customer"
+
+                  let reference =
+                      DataFrame.evalPipelineWithInEnvAsWritten
+                          (Operand.resolver Map.empty [ spend ] resolveHeld)
+                          Map.empty
+                          operandPipeline
+                          held.["customers"]
+                      |> ok "the reference"
+
+                  Expect.equal
+                      (SessionHash.tableText t)
+                      (SessionHash.tableText reference)
+                      "the run equals the reference"
+              | Error e -> failtestf "run: %A" e
+
+              let _, state = SessionWire.read (Some s.Head) (Export.wire s.Records) |> ok "read"
+              let a = Session.account state "q1" |> Option.get
+
+              Expect.equal
+                  a.Operands
+                  [ { Name = "spend"
+                      Table = "orders"
+                      Pipeline = spend.Pipeline
+                      Redacted = 0 } ]
+                  "the operand as written, verbatim: the request reads only public columns"
+
+              match a.Verdict with
+              | Some(Verdict.Admitted("analyst", reads, rules, _, 0, [ o ])) ->
+                  Expect.equal reads [ "public" ] "what it read, its operand's included"
+
+                  Expect.equal
+                      (o.Name, o.Table)
+                      ("spend", "orders")
+                      "the operand as rewritten names itself and its table"
+
+                  Expect.equal o.Pipeline spend.Pipeline "no rule rewrote it: orders carry no row policy"
+
+                  let granted =
+                      rules
+                      |> List.collect (fun r ->
+                          match r with
+                          | PolicyRule.ColumnsGranted cs -> cs |> List.map (fun (c, _) -> c.Table, c.Column)
+                          | _ -> [])
+
+                  Expect.contains granted ("orders", "amount") "the grant read inside the operand is a rule applied"
+              | other -> failtestf "verdict %A" other
+
+              match a.Statement with
+              | Some st -> Expect.stringContains st.Text "MAX" "the operand lowered inside the one statement"
+              | None -> failtest "no statement"
+
+              match state.Requests.["q1"].Split with
+              | Some split -> Expect.isEmpty split.Suffix "nothing runs locally"
+              | None -> failtest "no split"
+
+              match Session.replay state "q1" with
+              | ReplayVerdict.Reached _ -> ()
+              | other -> failtestf "a lowered operand join replays from its captured rows: %A" other
+
+          testCase
+              "the same request by a subject not granted the operand's rows is refused, with the operand recorded withheld"
+          <| fun _ ->
+              let s = operandStream ()
+              let _, state = SessionWire.read (Some s.Head) (Export.wire s.Records) |> ok "read"
+              let a = Session.account state "q2" |> Option.get
+
+              match a.Verdict with
+              | Some(Verdict.Refused("aggregator", _)) -> ()
+              | other -> failtestf "verdict %A" other
+
+              match a.Operands with
+              | [ o ] ->
+                  Expect.equal (o.Name, o.Table) ("spend", "orders") "named, with its table"
+                  Expect.equal o.Redacted 1 "its one literal withheld"
+                  Expect.isFalse (sprintf "%A" o.Pipeline |> fun t -> t.Contains "Int 1") "the literal is gone"
+              | other -> failtestf "operands %A" other
+
+          testCase
+              "an unrecordable request withholds its operands' literals, as written and as rewritten, and its reads include theirs"
+          <| fun _ ->
+              let m = operandModelWith [ "public" ]
+              // email is personal: the request reads it, so nothing it carries is recordable
+              let pipeline =
+                  [ Join(Ref "spend", [ "customer_id", "customer_id" ], Left)
+                    Sort [ Slot.Lit "customer_id", Asc ]
+                    Limit(Slot.Lit 100, Slot.Lit 0) ]
+
+              let s, _ = operandSession m analyst pipeline
+              let a = Session.account s.State "q1" |> Option.get
+
+              Expect.equal (a.Operands |> List.map _.Redacted) [ 1 ] "as written"
+
+              match a.Verdict with
+              | Some(Verdict.Admitted(_, reads, _, _, _, [ o ])) ->
+                  Expect.equal reads [ "personal"; "public" ] "both classifications"
+                  Expect.equal o.Redacted 1 "as rewritten"
+              | other -> failtestf "verdict %A" other
+
+              let wire = Export.wire s.Records
+              Expect.isFalse (wire.Contains secretEmail) "no classified value in the wire"
+
+          testCase
+              "where the split leaves an operand join in the local suffix, the run resolves the operand and the replay names it"
+          <| fun _ ->
+              let m = operandModelWith [ "public"; "personal" ]
+
+              // a pattern match the reference dialect does not lower places the boundary before the join
+              let pipeline =
+                  [ Filter(Binary(StartsWith, Col "email", Lit(Str "a")))
+                    Join(Ref "spend", [ "customer_id", "customer_id" ], Left)
+                    Sort [ Slot.Lit "customer_id", Asc ]
+                    Limit(Slot.Lit 100, Slot.Lit 0) ]
+
+              let s, final = operandSession m analyst pipeline
+
+              let reference =
+                  DataFrame.evalPipelineWithInEnvAsWritten
+                      (Operand.resolver Map.empty [ spend ] resolveHeld)
+                      Map.empty
+                      pipeline
+                      held.["customers"]
+                  |> ok "the reference"
+
+              match final with
+              | Ok t ->
+                  Expect.equal
+                      (SessionHash.tableText t)
+                      (SessionHash.tableText reference)
+                      "the run equals the reference"
+              | Error e -> failtestf "run: %A" e
+
+              match s.State.Requests.["q1"].Split with
+              | Some split ->
+                  Expect.isTrue
+                      (split.Suffix
+                       |> List.exists (fun t ->
+                           match t with
+                           | Join(Ref "spend", _, _) -> true
+                           | _ -> false))
+                      "the join runs locally"
+              | None -> failtest "no split"
+
+              match Session.replay s.State "q1" with
+              | ReplayVerdict.NotCaptured reason ->
+                  Expect.stringContains reason "'spend'" "the reason names the operand"
+              | other -> failtestf "expected NotCaptured, got %A" other
+
+          testCase "the reducer refuses operands that are not exactly those the pipeline's joins name"
+          <| fun _ ->
+              let header = (drive model (engine model (ref 0))).State.Header.Value
+
+              let o: OperandRecord =
+                  { Name = "spend"
+                    Table = "orders"
+                    Pipeline = []
+                    Redacted = 0 }
+
+              let joins = [ Join(Ref "spend", [ "customer_id", "customer_id" ], Left) ]
+
+              let received =
+                  SessionOps.applyAll
+                      [ SessionOp.Opened header
+                        SessionOp.Received("q", "customers", joins, 0, [ o ], "t") ]
+                      SessionOps.empty
+                  |> ok "received"
+
+              for recorded in
+                  [ []
+                    [ o; o ]
+                    [ { o with Table = "customers" } ]
+                    [ { o with Name = "other" } ] ] do
+                  match
+                      SessionOps.apply (SessionOp.Admitted("q", "p", [ "public" ], [], joins, 0, recorded)) received
+                  with
+                  | Error(SessionRejection.OperandMismatch _ as r) ->
+                      Expect.equal (SessionOps.code r) "DB-SESSION-OPERAND-MISMATCH" "its code"
+                  | other -> failtestf "%A: expected OperandMismatch, got %A" recorded other
+
+              match
+                  SessionOps.applyAll
+                      [ SessionOp.Opened header
+                        SessionOp.Received("q", "customers", [], 0, [ o ], "t") ]
+                      SessionOps.empty
+              with
+              | Error(_, SessionRejection.OperandMismatch _) -> ()
+              | other -> failtestf "an operand no join names: %A" other
+
+              Expect.isOk
+                  (SessionOps.apply (SessionOp.Admitted("q", "p", [ "public" ], [], joins, 0, [ o ])) received)
+                  "the honest record folds"
+
+          testCase "a request with no operand records exactly what 0.2.0 recorded: no operands member is written"
+          <| fun _ ->
+              let s = drive model (engine model (ref 0))
+
+              for op in opsOf s do
+                  Expect.isFalse ((SessionWire.encodeOp op).Contains "operands") (SessionOps.tag op)
+
+              // the frozen 0.2.0-era streams still read, fold and re-write to their own bytes
+              let path =
+                  IO.Path.Combine(CorpusTests.fixturesDir (), "session", "streams", "worked.jsonl")
+
+              let text = IO.File.ReadAllText path
+              let records, state = SessionWire.read None text |> ok "read"
+              Expect.equal (SessionWire.write records) text "the same bytes"
+
+              Expect.isTrue
+                  (state.Requests |> Map.forall (fun _ r -> List.isEmpty r.Operands))
+                  "an absent member is no operand"
+
+              // an empty operands member is refused: none is written by omission
+              let received =
+                  """{"$type":"received","at":"t","operands":[],"pipeline":[],"redacted":0,"request":"q","table":"t"}"""
+
+              Expect.isError (SessionWire.decodeOp received) "an empty operands array"
+
+          testCase "a stream with an operand request round-trips byte for byte, and its export is signed over its head"
+          <| fun _ ->
+              let s = operandStream ()
+              let wire = Export.wire s.Records
+              let records, state = SessionWire.read (Some s.Head) wire |> ok "read"
+              Expect.equal (SessionWire.write records) wire "the same bytes"
+              Expect.equal state s.State "the same state"
+
+              for op in opsOf s do
+                  let text = SessionWire.encodeOp op
+                  Expect.equal (SessionWire.decodeOp text |> ok text) op "the same op"
+
+              let payload = Export.statement state records |> ok "statement"
+              Expect.stringContains (Encoding.UTF8.GetString payload) ("\"sha256\":\"" + s.Head + "\"") "the head" ]
 
 // ---- the corpus vectors (`--write-fixtures`) ----
 
@@ -949,12 +1277,14 @@ let corpusOps () : (string * string) list =
         let op = ops |> List.find (fun o -> SessionOps.tag o = tag)
         sprintf "%02d-%s" (i + 1) tag, SessionWire.encodeOp op)
 
-/// The worked sessions as canonical wire, the last over the measured model: its statements' columns
-/// carry their fields, the amount stating kilograms.
+/// The worked sessions as canonical wire, the third over the measured model: its statements' columns
+/// carry their fields, the amount stating kilograms. The last joins a grouped operand (Phase 36):
+/// admitted and run, then refused for a subject not granted the operand's rows.
 let corpusStreams () : (string * string) list =
     [ "worked", Export.wire (worked ()).Records
       "recordable", Export.wire (recordable ()).Records
-      "measured", Export.wire (measured ()).Records ]
+      "measured", Export.wire (measured ()).Records
+      "operand", Export.wire (operandStream ()).Records ]
 
 /// The measured session's `ran` op: a statement record whose result columns carry their fields.
 let corpusMeasuredRan () : string =
@@ -977,8 +1307,8 @@ let corpusRejects () : (string * string * string * string option * string) list 
 
         let ops =
             [ SessionOp.Opened header
-              SessionOp.Received("q", "customers", [], 0, "t")
-              SessionOp.Admitted("q", "p", [ "personal" ], [], [], 0)
+              SessionOp.Received("q", "customers", [], 0, [], "t")
+              SessionOp.Admitted("q", "p", [ "personal" ], [], [], 0, [])
               SessionOp.Lowered("q", 1, [], 0, None)
               SessionOp.Ran(
                   "q",

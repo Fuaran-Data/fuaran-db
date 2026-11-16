@@ -87,6 +87,21 @@ type WithheldPart =
     /// The statement's result rows.
     | Rows
 
+/// A grouped operand as the record holds it (Phase 36, DECISIONS.md D17): the name a join gives it,
+/// the model table it reads, and its pipeline, redacted as the request's is. `Redacted` counts the
+/// literals replaced in this pipeline, its withheld slots numbered from 1.
+type OperandRecord =
+    {
+        /// The name its join gives it.
+        Name: string
+        /// The model name of the one table it reads.
+        Table: string
+        /// Its pipeline: as written in `Received`, as rewritten in `Admitted`.
+        Pipeline: Transform list
+        /// Literals redacted from it.
+        Redacted: int
+    }
+
 /// The op vocabulary — closed. Every op but `Opened` and `SchemaReported` names the request it
 /// belongs to; a request's ops arrive in the order the reducer admits (`SessionOps.next`).
 [<RequireQualifiedAccess>]
@@ -96,18 +111,27 @@ type SessionOp =
     /// A source reported its schema, and the drift verdict against the model; `drift` is `None` when
     /// the model holds no source of that name.
     | SchemaReported of source: string * schema: ReportedSchema * drift: TableDrift list option * at: string
-    /// A pipeline arrived over a table. `redacted` counts the literals replaced by withheld slots
-    /// (`Recording.redact`); zero means the pipeline is verbatim.
-    | Received of request: string * table: string * pipeline: Transform list * redacted: int * at: string
-    /// The policy admitted it: for whom, the classifications it reads, every rule applied, and the
-    /// pipeline as rewritten — redacted as `Received` is.
+    /// A pipeline arrived over a table, with the grouped operands its joins name, each as written.
+    /// `redacted` counts the literals replaced by withheld slots (`Recording.redact`); zero means the
+    /// pipeline is verbatim.
+    | Received of
+        request: string *
+        table: string *
+        pipeline: Transform list *
+        redacted: int *
+        operands: OperandRecord list *
+        at: string
+    /// The policy admitted it: for whom, the classifications it reads (its operands' included), every
+    /// rule applied (inside its operands too), the pipeline as rewritten, and each grouped operand the
+    /// admitted pipeline joins, as rewritten — redacted as `Received` is.
     | Admitted of
         request: string *
         principal: string *
         reads: string list *
         rules: PolicyRule list *
         pipeline: Transform list *
-        redacted: int
+        redacted: int *
+        operands: OperandRecord list
     /// The policy refused it, by the refusal's code.
     | Refused of request: string * principal: string * code: string
     /// The fold split: how many planned steps the statement carries, the steps left to run locally,
@@ -173,14 +197,15 @@ type Guard =
 /// The policy's verdict on a request.
 [<RequireQualifiedAccess>]
 type Verdict =
-    /// Admitted: for whom, the classifications read, the rules applied, the pipeline as rewritten
-    /// and how many of its literals were redacted.
+    /// Admitted: for whom, the classifications read, the rules applied, the pipeline as rewritten,
+    /// how many of its literals were redacted, and the grouped operands it joins, as rewritten.
     | Admitted of
         principal: string *
         reads: string list *
         rules: PolicyRule list *
         pipeline: Transform list *
-        redacted: int
+        redacted: int *
+        operands: OperandRecord list
     /// Refused, by code.
     | Refused of principal: string * code: string
 
@@ -220,6 +245,8 @@ type RequestRecord =
         Pipeline: Transform list
         /// Literals redacted from it.
         Redacted: int
+        /// The grouped operands its joins name, as written, redacted as recorded.
+        Operands: OperandRecord list
         /// When it arrived.
         ReceivedAt: string
         /// The schemas the session had recorded when it arrived, by source.
@@ -280,6 +307,8 @@ type SessionRejection =
     | VerdictMismatch of request: string * source: string * expected: FingerprintVerdict option
     /// Recorded rows that do not match the statement: their count or their width.
     | RowsMismatch of request: string * detail: string
+    /// Recorded operands that are not exactly those the pipeline's joins name.
+    | OperandMismatch of request: string * detail: string
 
 /// The reducer and the stages it admits.
 [<RequireQualifiedAccess>]
@@ -340,9 +369,46 @@ module SessionOps =
     /// admitted.
     let unrecordable (recordable: string list) (r: RequestRecord) : string list =
         match r.Verdict with
-        | Some(Verdict.Admitted(_, reads, _, _, _)) -> unrecordableReads recordable reads
+        | Some(Verdict.Admitted(_, reads, _, _, _, _)) -> unrecordableReads recordable reads
         | Some(Verdict.Refused _)
         | None -> []
+
+    /// The names `pipeline`'s joins give the operands among `names`, distinct, in join order: the
+    /// operands a recorded pipeline joins (DECISIONS.md D17). A redacted pipeline keeps every join's
+    /// name, so the answer is the same over the pipeline as recorded.
+    let joined (names: string list) (pipeline: Transform list) : string list =
+        pipeline
+        |> List.choose (fun step ->
+            match step with
+            | Join(Ref n, _, _) when List.contains n names -> Some n
+            | _ -> None)
+        |> List.distinct
+
+    /// Why recorded `operands` are not exactly those `pipeline`'s joins name among `names`, in join
+    /// order, each reading the table `tables` gives its name; `None` when they are.
+    let private operandsMismatch
+        (names: string list)
+        (tables: Map<string, string>)
+        (pipeline: Transform list)
+        (operands: OperandRecord list)
+        : string option =
+        let expected = joined names pipeline
+        let recorded = operands |> List.map _.Name
+
+        if recorded <> expected then
+            Some(
+                sprintf
+                    "the operands recorded are [%s]; the pipeline's joins name [%s]"
+                    (String.concat ", " recorded)
+                    (String.concat ", " expected)
+            )
+        else
+            operands
+            |> List.tryPick (fun o ->
+                match Map.tryFind o.Name tables with
+                | Some t when t <> o.Table ->
+                    Some(sprintf "the operand '%s' reads table '%s', received as reading '%s'" o.Name o.Table t)
+                | _ -> None)
 
     /// The ops a request admits next, by tag; empty once it has ended.
     let next (r: RequestRecord) : string list =
@@ -366,8 +432,8 @@ module SessionOps =
         match op with
         | SessionOp.Opened _
         | SessionOp.SchemaReported _ -> None
-        | SessionOp.Received(r, _, _, _, _)
-        | SessionOp.Admitted(r, _, _, _, _, _)
+        | SessionOp.Received(r, _, _, _, _, _)
+        | SessionOp.Admitted(r, _, _, _, _, _, _)
         | SessionOp.Refused(r, _, _)
         | SessionOp.Lowered(r, _, _, _, _)
         | SessionOp.Fingerprinted(r, _, _, _, _, _, _, _)
@@ -429,13 +495,26 @@ module SessionOps =
             | SessionOp.Opened _
             | SessionOp.SchemaReported _
             | SessionOp.Received _ -> Error(SessionRejection.OutOfOrder(r.Id, tag, allowed))
-            | SessionOp.Admitted(_, principal, reads, rules, pipeline, redacted) ->
-                put
-                    { r with
-                        Verdict =
-                            Some(
-                                Verdict.Admitted(principal, List.distinct reads |> List.sort, rules, pipeline, redacted)
-                            ) }
+            | SessionOp.Admitted(_, principal, reads, rules, pipeline, redacted, operands) ->
+                let names = r.Operands |> List.map _.Name
+                let tables = r.Operands |> List.map (fun o -> o.Name, o.Table) |> Map.ofList
+
+                match operandsMismatch names tables pipeline operands with
+                | Some detail -> Error(SessionRejection.OperandMismatch(r.Id, detail))
+                | None ->
+                    put
+                        { r with
+                            Verdict =
+                                Some(
+                                    Verdict.Admitted(
+                                        principal,
+                                        List.distinct reads |> List.sort,
+                                        rules,
+                                        pipeline,
+                                        redacted,
+                                        operands
+                                    )
+                                ) }
             | SessionOp.Refused(_, principal, code) ->
                 put
                     { r with
@@ -570,30 +649,36 @@ module SessionOps =
                               Drift = drift
                               At = at }
                             state.Sources }
-        | Some _, SessionOp.Received(request, table, pipeline, redacted, at) ->
+        | Some _, SessionOp.Received(request, table, pipeline, redacted, operands, at) ->
+            let names = operands |> List.map _.Name
+
             if Map.containsKey request state.Requests then
                 Error(SessionRejection.DuplicateRequest request)
             else
-                let record =
-                    { Id = request
-                      Table = table
-                      Pipeline = pipeline
-                      Redacted = redacted
-                      ReceivedAt = at
-                      Schemas = state.Sources
-                      Verdict = None
-                      Split = None
-                      Guards = []
-                      Statement = None
-                      Values = None
-                      Returned = None
-                      Rows = None
-                      Outcome = None }
+                match operandsMismatch names Map.empty pipeline operands with
+                | Some detail -> Error(SessionRejection.OperandMismatch(request, detail))
+                | None ->
+                    let record =
+                        { Id = request
+                          Table = table
+                          Pipeline = pipeline
+                          Redacted = redacted
+                          Operands = operands
+                          ReceivedAt = at
+                          Schemas = state.Sources
+                          Verdict = None
+                          Split = None
+                          Guards = []
+                          Statement = None
+                          Values = None
+                          Returned = None
+                          Rows = None
+                          Outcome = None }
 
-                Ok
-                    { state with
-                        Requests = Map.add request record state.Requests
-                        Order = state.Order @ [ request ] }
+                    Ok
+                        { state with
+                            Requests = Map.add request record state.Requests
+                            Order = state.Order @ [ request ] }
         | Some h, other ->
             match requestOf other with
             | None -> Error(SessionRejection.OutOfOrder("", tag other, []))
@@ -623,6 +708,7 @@ module SessionOps =
         | SessionRejection.DigestForm _ -> "DB-SESSION-DIGEST-FORM"
         | SessionRejection.VerdictMismatch _ -> "DB-SESSION-VERDICT-MISMATCH"
         | SessionRejection.RowsMismatch _ -> "DB-SESSION-ROWS-MISMATCH"
+        | SessionRejection.OperandMismatch _ -> "DB-SESSION-OPERAND-MISMATCH"
 
     /// The rejection as one sentence, naming what is admitted instead.
     let describe (r: SessionRejection) : string =
@@ -649,3 +735,5 @@ module SessionOps =
         | SessionRejection.VerdictMismatch(q, source, expected) ->
             sprintf "request '%s': the verdict on source '%s' is not the comparison's (%A)" q source expected
         | SessionRejection.RowsMismatch(q, detail) -> sprintf "request '%s': %s" q detail
+        | SessionRejection.OperandMismatch(q, detail) ->
+            sprintf "request '%s': %s; record exactly the operands its joins name, in join order" q detail

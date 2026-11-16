@@ -187,6 +187,24 @@ module SessionWire =
         | WithheldPart.Parameters -> "parameters"
         | WithheldPart.Rows -> "rows"
 
+    /// A request's grouped operands (DECISIONS.md D17), written only when there is one, so a request
+    /// with none is written as 0.2.0 wrote it.
+    let private operandsJson (operands: OperandRecord list) =
+        optional
+            "operands"
+            (match operands with
+             | [] -> None
+             | os ->
+                 os
+                 |> List.map (fun o ->
+                     JObj
+                         [ "name", JStr o.Name
+                           "table", JStr o.Table
+                           "pipeline", pipelineJson o.Pipeline
+                           "redacted", JInt o.Redacted ])
+                 |> JArr
+                 |> Some)
+
     /// An op as a `JVal`. Optional members are written only when present, so each value has one spelling.
     let encodeOpJson (op: SessionOp) : JVal =
         let t = SessionOps.tag op
@@ -208,23 +226,25 @@ module SessionWire =
                 t
                 ([ "source", JStr source; "schema", schemaJson schema; "at", JStr at ]
                  @ optional "drift" (drift |> Option.map (List.map driftJson >> JArr)))
-        | SessionOp.Received(request, table, pipeline, redacted, at) ->
+        | SessionOp.Received(request, table, pipeline, redacted, operands, at) ->
             Canonical.typed
                 t
-                [ "request", JStr request
-                  "table", JStr table
-                  "pipeline", pipelineJson pipeline
-                  "redacted", JInt redacted
-                  "at", JStr at ]
-        | SessionOp.Admitted(request, principal, reads, rules, pipeline, redacted) ->
+                ([ "request", JStr request
+                   "table", JStr table
+                   "pipeline", pipelineJson pipeline
+                   "redacted", JInt redacted
+                   "at", JStr at ]
+                 @ operandsJson operands)
+        | SessionOp.Admitted(request, principal, reads, rules, pipeline, redacted, operands) ->
             Canonical.typed
                 t
-                [ "request", JStr request
-                  "principal", JStr principal
-                  "reads", strs reads
-                  "rules", JArr(rules |> List.map ruleJson)
-                  "pipeline", pipelineJson pipeline
-                  "redacted", JInt redacted ]
+                ([ "request", JStr request
+                   "principal", JStr principal
+                   "reads", strs reads
+                   "rules", JArr(rules |> List.map ruleJson)
+                   "pipeline", pipelineJson pipeline
+                   "redacted", JInt redacted ]
+                 @ operandsJson operands)
         | SessionOp.Refused(request, principal, code) ->
             Canonical.typed t [ "request", JStr request; "principal", JStr principal; "code", JStr code ]
         | SessionOp.Lowered(request, lowered, suffix, redacted, boundary) ->
@@ -692,6 +712,33 @@ module SessionWire =
                   CaptureKey = key }
         }
 
+    let private operandOf (path: string) (v: JVal) : Result<OperandRecord, WireError> =
+        result {
+            let! fs = fieldsOf path v
+
+            do! only path [ "name"; "table"; "pipeline"; "redacted" ] fs
+
+            let! name = str path "name" fs
+            let! table = str path "table" fs
+            let! pipeline = pipelineOf path "pipeline" fs
+            let! redacted = intField path "redacted" fs
+
+            return
+                { Name = name
+                  Table = table
+                  Pipeline = pipeline
+                  Redacted = redacted }
+        }
+
+    /// A request's grouped operands: an absent member is none, as 0.2.0 wrote every request; an empty
+    /// array is refused, because none is written by omission and each value has one spelling.
+    let private operandsOf (path: string) fs : Result<OperandRecord list, WireError> =
+        match optField "operands" fs with
+        | None -> Ok []
+        | Some(JArr []) -> Error(WireError.WrongShape(path + ".operands", "a non-empty array; none is omitted"))
+        | Some(JArr os) -> os |> traverse (fun i o -> operandOf (sprintf "%s.operands[%d]" path i) o)
+        | Some _ -> Error(WireError.WrongShape(path + ".operands", "an array"))
+
     /// The member names each op declares beside `$type`.
     let private members (tag: string) : string list =
         match tag with
@@ -705,8 +752,8 @@ module SessionWire =
               "providerVersion"
               "at" ]
         | "schemaReported" -> [ "source"; "schema"; "drift"; "at" ]
-        | "received" -> [ "request"; "table"; "pipeline"; "redacted"; "at" ]
-        | "admitted" -> [ "request"; "principal"; "reads"; "rules"; "pipeline"; "redacted" ]
+        | "received" -> [ "request"; "table"; "pipeline"; "redacted"; "operands"; "at" ]
+        | "admitted" -> [ "request"; "principal"; "reads"; "rules"; "pipeline"; "redacted"; "operands" ]
         | "refused" -> [ "request"; "principal"; "code" ]
         | "lowered" -> [ "request"; "lowered"; "suffix"; "redacted"; "boundary" ]
         | "fingerprinted" ->
@@ -781,8 +828,9 @@ module SessionWire =
                     let! table = str p "table" fs
                     let! pipeline = pipelineOf p "pipeline" fs
                     let! redacted = intField p "redacted" fs
+                    let! operands = operandsOf p fs
                     let! at = str p "at" fs
-                    return SessionOp.Received(request, table, pipeline, redacted, at)
+                    return SessionOp.Received(request, table, pipeline, redacted, operands, at)
                 | "admitted" ->
                     let! request = str p "request" fs
                     let! principal = str p "principal" fs
@@ -791,7 +839,8 @@ module SessionWire =
                     let! rules = rulesJson |> traverse (fun i r -> ruleOf (sprintf "%s.rules[%d]" p i) r)
                     let! pipeline = pipelineOf p "pipeline" fs
                     let! redacted = intField p "redacted" fs
-                    return SessionOp.Admitted(request, principal, reads, rules, pipeline, redacted)
+                    let! operands = operandsOf p fs
+                    return SessionOp.Admitted(request, principal, reads, rules, pipeline, redacted, operands)
                 | "refused" ->
                     let! request = str p "request" fs
                     let! principal = str p "principal" fs

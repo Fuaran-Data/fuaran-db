@@ -22,12 +22,12 @@ No package here opens a connection: the host supplies the executor.
 
 ## Status
 
-Pre-release, and **not yet published**: no package of this repository is on nuget.org, and nothing is
-tagged. The first release is 0.1.0, of six packages (`Fuaran.DB`, `Fuaran.DB.Provider`,
+Pre-release, on the `0.x` line. 0.1.0 and 0.2.0 of the six packages (`Fuaran.DB`, `Fuaran.DB.Provider`,
 `Fuaran.DB.Dialect.SqlServer`, `Fuaran.DB.Dialect.PostgreSql`, `Fuaran.DB.Conformance` and
-`Fuaran.DB.Session`), pushed to nuget.org from a `v0.1.0` tag by
-[`publish-packages.yml`](.github/workflows/publish-packages.yml). Until then, build from source: every dependency already
-restores from nuget.org, at `Fuaran.Core.*` 0.42.0 and `Fuaran.Compute.DataFrame` 0.44.0.
+`Fuaran.DB.Session`) are tagged and on nuget.org, pushed from their `v*` tags by
+[`publish-packages.yml`](.github/workflows/publish-packages.yml); the standing version is the draft
+[`STABILITY.md`](STABILITY.md) heads. Every dependency restores from nuget.org, at `Fuaran.Core.*` 0.42.0 and
+`Fuaran.Compute.DataFrame` 0.44.0.
 
 `Fuaran.DB` holds the dataset model: its node kinds and op vocabulary, the model rules, the
 check of a pipeline against a model, seeding and drift against a reported schema, a canonical wire codec with
@@ -52,7 +52,8 @@ in-memory interpreter only: no PostgreSQL engine run is recorded yet, and the su
 dialect is certified with: a seed, stated fixtures with the reference's answers (emitted to [`conformance/`](conformance/)),
 and a runner over the host's executor.
 `Fuaran.DB.Session` is the connection record. It holds what passed over a connection as a hash-chained
-op-stream: the schema each source reported, each pipeline and its policy verdict, the fingerprint guarding
+op-stream: the schema each source reported, each pipeline with the grouped operands its joins name and its
+policy verdict, the fingerprint guarding
 each statement, the statement by hash with its parameter types, the row count, a result digest and the
 outcome. It records values only under a classification the model marks recordable, and records each
 refusal to record as an op. A captured session replays without a database, and a session exports as the

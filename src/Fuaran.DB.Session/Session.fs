@@ -53,6 +53,9 @@ type Account =
         Table: string
         /// The pipeline as received, and how many of its literals were withheld.
         Pipeline: Transform list * int
+        /// The grouped operands its joins name, as received: each one's name, table and pipeline. The
+        /// verdict holds each as rewritten, and its rules the row policies and floors applied inside.
+        Operands: OperandRecord list
         /// The policy's verdict: the rules applied and the pipeline as rewritten, or the refusal.
         Verdict: Verdict option
         /// The statement it ran.
@@ -174,20 +177,44 @@ module Session =
     let reportSchema (source: string) (reported: ReportedSchema) (at: string) (s: Session) =
         append s [ SessionOp.SchemaReported(source, reported, Drift.check s.model source reported, at) ]
 
-    /// Receive a pipeline over `table` for `subject` and decide it: the policy runs, and the record
-    /// gains the pipeline and the verdict. The pipeline and the rules are recorded with their literals
-    /// withheld unless every classification the request reads is recordable; a refused request's
-    /// reads are unknown, so its pipeline is always recorded withheld.
-    let request
+    /// Each operand as the record holds it: verbatim, or with its literals withheld.
+    let private operandRecords (withhold: bool) (operands: Operand list) : OperandRecord list =
+        operands
+        |> List.map (fun o ->
+            let pipeline, redacted =
+                if withhold then
+                    Recording.redact o.Pipeline
+                else
+                    o.Pipeline, 0
+
+            { Name = o.Name
+              Table = o.Table
+              Pipeline = pipeline
+              Redacted = redacted })
+
+    /// Receive a pipeline over `table` for `subject`, its joins bringing in `operands` by name
+    /// (DECISIONS.md D16, D17), and decide it: `Policy.admitWith` runs, and the record gains the
+    /// pipeline, the operands its joins name and the verdict. An admitted request's record holds each
+    /// operand as written and as rewritten, and its reads and rules cover what its operands read.
+    /// The pipelines and the rules are recorded with their literals withheld unless every
+    /// classification the request reads is recordable; a refused request's reads are unknown, so its
+    /// pipeline and its operands are always recorded withheld. An operand no join names is not part
+    /// of the request, and is not recorded.
+    let requestWith
         (id: string)
         (subject: Subject)
         (table: string)
+        (operands: Operand list)
         (pipeline: Transform list)
         (at: string)
         (s: Session)
         : Result<Session * Result<Admitted, PolicyRefusal>, SessionRejection> =
         let recordable = (header s).Recordable
-        let verdict = Policy.admit s.model subject (Ref table) pipeline
+        let verdict = Policy.admitWith s.model subject operands (Ref table) pipeline
+
+        let named =
+            SessionOps.joined (operands |> List.map _.Name) pipeline
+            |> List.choose (fun n -> Operand.tryFind n operands)
 
         let keep (reads: string list) =
             List.isEmpty (SessionOps.unrecordableReads recordable reads)
@@ -195,20 +222,29 @@ module Session =
         match verdict with
         | Ok admitted ->
             let reads = Recording.reads s.model admitted.Applied
+            let withhold = not (keep reads)
 
             let written, writtenRedacted, rules, rewritten, redacted =
-                if keep reads then
-                    pipeline, 0, admitted.Applied, admitted.Pipeline, 0
-                else
+                if withhold then
                     let w, wn = Recording.redact pipeline
                     let rw, rn = Recording.redact admitted.Pipeline
                     let rules, n = Recording.redactRules rn admitted.Applied
                     w, wn, rules, rw, n
+                else
+                    pipeline, 0, admitted.Applied, admitted.Pipeline, 0
 
             append
                 s
-                [ SessionOp.Received(id, table, written, writtenRedacted, at)
-                  SessionOp.Admitted(id, subject.Principal, reads, rules, rewritten, redacted) ]
+                [ SessionOp.Received(id, table, written, writtenRedacted, operandRecords withhold named, at)
+                  SessionOp.Admitted(
+                      id,
+                      subject.Principal,
+                      reads,
+                      rules,
+                      rewritten,
+                      redacted,
+                      operandRecords withhold admitted.Operands
+                  ) ]
             |> Result.map (fun s' ->
                 { s' with
                     admitted = Map.add id admitted s'.admitted },
@@ -218,9 +254,20 @@ module Session =
 
             append
                 s
-                [ SessionOp.Received(id, table, w, wn, at)
+                [ SessionOp.Received(id, table, w, wn, operandRecords true named, at)
                   SessionOp.Refused(id, subject.Principal, Policy.code refusal) ]
             |> Result.map (fun s' -> s', verdict)
+
+    /// `requestWith` with no grouped operand: the request 0.2.0 recorded, op for op.
+    let request
+        (id: string)
+        (subject: Subject)
+        (table: string)
+        (pipeline: Transform list)
+        (at: string)
+        (s: Session)
+        : Result<Session * Result<Admitted, PolicyRefusal>, SessionRejection> =
+        requestWith id subject table [] pipeline at s
 
     /// Lower an admitted request through the session's dialect and record the split; a pipeline that
     /// does not lower at all is recorded as failed, by the refusal's tag.
@@ -373,6 +420,7 @@ module Session =
             { Request = r.Id
               Table = r.Table
               Pipeline = r.Pipeline, r.Redacted
+              Operands = r.Operands
               Verdict = r.Verdict
               Statement = r.Statement |> Option.map fst
               Schemas = r.Schemas
@@ -423,12 +471,25 @@ module Session =
     /// Replay one request from the record alone: rebuild its statement's result from the captured rows,
     /// run the recorded local suffix again in the reference evaluator, and compare the digest it
     /// reaches with the recorded one. No executor is taken, so no database can be reached; a suffix
-    /// that names another source is refused rather than resolved.
+    /// that names another source is refused rather than resolved. A suffix that joins a grouped
+    /// operand is not captured (DECISIONS.md D17): the record holds the operand's pipeline but not the
+    /// rows of the table it reads, so the verdict names the operand rather than reaching anything.
     let replay (state: SessionState) (request: string) : ReplayVerdict =
         match Map.tryFind request state.Requests with
         | None -> ReplayVerdict.NotCaptured "no such request"
         | Some r ->
+            let suffixOperand =
+                r.Split
+                |> Option.bind (fun split ->
+                    SessionOps.joined (r.Operands |> List.map _.Name) split.Suffix |> List.tryHead)
+
             match r.Statement, r.Rows, r.Split, r.Outcome with
+            | _, _, _, Some(Outcome.Finished _) when Option.isSome suffixOperand ->
+                ReplayVerdict.NotCaptured(
+                    sprintf
+                        "the local suffix joins the grouped operand '%s', whose rows the record does not capture"
+                        suffixOperand.Value
+                )
             | Some(st, _),
               Some(Recorded.Recorded rows),
               Some split,

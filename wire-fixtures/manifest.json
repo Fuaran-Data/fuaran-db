@@ -34,8 +34,8 @@
       "id": "session-streams",
       "kind": "accept-session",
       "path": "session/streams",
-      "vectors": 3,
-      "description": "Worked sessions as canonical JSONL chains (SHA-256, no trailing newline): one over a model marking only 'public' recordable, whose personal request is recorded with its values withheld, one marking every classification recordable, and one over the same model with the order amount stated in kilograms, whose statements' result columns carry their fields. Each reads, verifies, folds and re-writes to its own bytes."
+      "vectors": 4,
+      "description": "Worked sessions as canonical JSONL chains (SHA-256, no trailing newline): one over a model marking only 'public' recordable, whose personal request is recorded with its values withheld, one marking every classification recordable, one over the same model with the order amount stated in kilograms, whose statements' result columns carry their fields, and one whose requests join a grouped operand (Phase 36): admitted, lowered and run with the operand recorded as written and as rewritten, then refused for a subject not granted the operand's rows, with the operand recorded withheld. Each reads, verifies, folds and re-writes to its own bytes."
     },
     {
       "id": "session-measured",

@@ -1,5 +1,68 @@
 # Fuaran.DB — decisions (newest first)
 
+## 2026-11-16 — D17: a recording session admits and records a request's grouped operands (Phase 36)
+
+D16 taught the check, the policy and the provider to carry grouped operands, and left the recording session as
+it was: `Session.request` called `Policy.admit`, which admits no operand, so a request joining one was refused by
+the session although the provider admitted and lowered it when called directly. A consumer must have both at once:
+the grouped join, and the record of the run that carries its statement hash and session head. Seven rulings.
+
+1. **`Session.requestWith` beside `Session.request`.** `requestWith` takes the operands and admits through
+   `Policy.admitWith`; `request` is `requestWith` with none. It is the shape D16 chose for `check`/`checkWith` and
+   `admit`/`admitWith`, for the same reason: every existing caller compiles and means what it meant, and a
+   request with no operand produces exactly the ops 0.2.0 produced. Changing `request`'s signature would have
+   broken every caller to say nothing new. `lower`, `guard` and `run` take no operand argument: the session keeps
+   the `Admitted` it was given, which holds the operands as the policy rewrote them, and `FoldSplit.lower` and
+   `FoldSplit.finish` read them from there.
+
+2. **The record holds each operand the request joins, as written and as rewritten.** An `OperandRecord` is the
+   operand's name, the model table it reads, its pipeline and how many of its literals were redacted.
+   `SessionOp.Received` gains the operands as written and `SessionOp.Admitted` the operands as rewritten (its
+   table's row policies first, a grouping over an aggregate-only column floored); `RequestRecord.Operands`,
+   `Verdict.Admitted` and `Account.Operands` carry them. Only the operands the pipeline's joins name are recorded,
+   in join order: an operand passed and never joined is not part of the request, and the policy drops it too. The
+   rules applied inside an operand were already `Admitted.Applied` (D16.4's `RowPolicyApplied` at the join's
+   step, `GroupFloorApplied`, and the operand's columns in `ColumnsGranted`), so the recorded rules and the
+   request's reads (`Recording.reads`) already covered them; a test now pins it.
+
+3. **An operand's literals are withheld on the pipeline's rule.** One recording decision per request (D9.2)
+   covers its operands: when the request reads a classification the model does not mark recordable, every
+   operand pipeline is redacted with `Recording.redact`, as written and as rewritten, and a refused request's
+   operands are always recorded withheld, as its pipeline is. Each operand pipeline numbers its own withheld slots
+   from 1 and counts them in its own `Redacted`.
+
+4. **The reducer holds the record to the joins (the operands law).** `Received` folds only when its operands are
+   exactly those its pipeline's joins name among them, distinct and in join order; `Admitted` folds only when its
+   operands are exactly those the admitted pipeline's joins name among the received ones, each reading the table
+   it was received with. Anything else is refused as `SessionRejection.OperandMismatch`
+   (`DB-SESSION-OPERAND-MISMATCH`), naming both lists. `StreamLaws.operandLaw` states it over drawn requests
+   recorded honestly or with an operand dropped, added, reordered or moved to another table, with its own sample
+   adequacy; the stream laws' generator now mixes operand requests into its chains.
+
+5. **The wire: an absent `operands` member is none, so a 0.2.0 stream still reads.** `received` and `admitted`
+   gain an optional `operands` member, an array of `{name, table, pipeline, redacted}`, written only when there is
+   an operand. A request with none is written byte for byte as 0.2.0 wrote it, every frozen stream in
+   `wire-fixtures/session/` still reads, verifies, folds and re-writes to its own bytes, and a test pins both. An
+   empty `operands` array is refused (`DB-WIRE-WRONG-SHAPE`): none is spelled by omission, so each value has one
+   spelling. A 0.2.0 reader refuses a stream that records an operand, as its strict decoder refuses any member it
+   does not know: the record is readable forward, not backward. `wire-fixtures/session/streams/operand.jsonl`
+   is the new vector, admitted and refused.
+
+6. **The in-toto predicate type does not move** (`db-session/v0.1`). The predicate summarises the session (its
+   header, its record count, its statement hashes, the claim) and gains no member; its subject is the session's
+   head, which already covers every operand recorded through the chain. A verifier of the predicate reads nothing
+   new. *Reopen* if the predicate comes to name what each statement read.
+
+7. **Replay does not capture an operand's rows, and says so.** Where the fold split leaves an operand join in the
+   local suffix, `Session.run` resolves the operand as `Operand.resolver` does (it always did, through
+   `FoldSplit.finish`), over the host's `resolve` for the operand's table. The record holds the operand's
+   pipeline but not that table's rows, so `Session.replay` answers `NotCaptured`, with a reason naming the
+   operand, for a finished request whose recorded suffix joins one; it never reaches a silent `Reached` or an
+   unnamed `Unevaluable`. A request whose operand join lowered replays as before, from the statement's captured
+   rows. Capturing an operand's table would put a second statement's worth of rows in the record under the
+   first statement's capture key, which the capture model does not have. *Reopen* when a consumer needs to
+   replay a suffix-side operand join; the route is a capture op per resolved source.
+
 ## 2026-11-15 — D16: a join to a grouped operand on the declared key lowers, and `Count` is pinned (Phase 34)
 
 D4.2 admits a join only along a relation the model declares between two modelled tables, because a join is
