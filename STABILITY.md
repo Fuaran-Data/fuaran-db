@@ -82,7 +82,7 @@ public feed, names one contract and is never repacked: a change after that point
 
 ## Versions
 
-### 0.2.0 — DRAFT
+### 0.2.0
 
 A statically typed `Derive` lowers, and so does a grouping keyed by it (Phase 33, DECISIONS.md D15). 0.1.0 is
 tagged, so the change cannot ride it, and two closed unions gain a case, so on the `0.x` line it advances the
