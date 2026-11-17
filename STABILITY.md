@@ -141,6 +141,20 @@ already carries, so no number moves.
   `join-after-rename`, `join-after-grouping-rollup`), is added to `Fixtures.all`, 112 in all, with their files and
   the manifest. No existing fixture moves.
 
+A keyed column's presence may be tested, and the test is not the key (Phase 42, DECISIONS.md D20). It rides this
+draft: no public member is added or removed and no wire moves, so its class is a refusal narrowed, below the draft's.
+
+- **The posture, narrowed (D20, amending D18.2)**: under `Keyed`, a presence test of a keyed column (`IsNull` of
+  it, or `Eq` / `Ne` of it, or of its `Coalesce` with the empty text, against the empty text, and the negation of
+  each) is admitted as a filter predicate and as a `Case`'s condition, over a name carrying the column unchanged
+  (never a derivation or a pick). Its answer carries no lineage of the column, so a label chosen by it may be
+  grouped on, sorted by and returned. Pipelines refused before as `KeyOnly` or `KeyInResult` for such a test are
+  admitted. Every other predicate on a keyed column, and every `Case` branch that answers it, is refused as before.
+- **Unchanged**: a subject holding `Aggregate` or `RowLevel` reads nothing differently, the same refusals and the
+  same floor; and under `Keyed` the grain, key-in-result, pick and floor rulings stand. A floor over several
+  conditional copies of a key can now be reached under `Keyed`, and drops each group where any copy has no member
+  (D20.6).
+
 ### 0.3.0
 
 A recording session admits and records a request's grouped operands (Phase 36, DECISIONS.md D17). 0.2.0 is

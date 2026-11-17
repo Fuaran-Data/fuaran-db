@@ -36,7 +36,7 @@ against a reported schema, a canonical wire codec with its conformance corpus in
 policy: for a subject the host supplies, column grants, row policies, cost limits and a minimum group size
 decide on the tree whether a pipeline is admitted, refusing by name or rewriting visibly. A grant reads a
 classification in aggregate only, as a key (a grouping or join key whose value and grain never reach the
-result), or row by row. For a peer that
+result, and whose presence alone a filter or a condition may test), or row by row. For a peer that
 holds no credential, the model projects per subject to the part its grants may read, with no physical
 identifier, row policy or limit, and the same bytes whatever the model holds outside it; the peer pins the
 projection by hash, checks a fresh one for drift, and checks a pipeline against it before sending, and what

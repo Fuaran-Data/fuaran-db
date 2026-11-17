@@ -1,5 +1,85 @@
 # Fuaran.DB — decisions (newest first)
 
+## 2026-11-17 — D20: a keyed column's presence may be tested, and the test is not the key (Phase 42)
+
+D18.2 refused every row-wise use of a keyed column but a grouping key or a join key, a predicate included. Phase 41
+found the first consumer's six pipelines refused under the keyed grant for one reason (D19.7): they test whether a
+key is present. The order stage keeps the orders of a known customer with a non-blank test of the customer key, and
+the line stage labels an order without lines by testing, after a left join, whether the line's order key is null,
+then groups and sorts by those labels. A presence test says whether a row has a key. It does not say which. Seven
+rulings; D18.2 is amended in place, and D19.7's reopen clause is closed.
+
+1. **What a presence test is: a closed set of forms over one name.** `IsNull` of the name; a comparison, `Eq` or
+   `Ne`, of the name against the empty text; and the same comparison of the name's `Coalesce` with the empty text,
+   which is how the consumer writes "not blank". Either operand may stand on either side, and a negation is `Not`
+   of one, which the walk reaches as it reaches any `Not`. The name must carry one model column UNCHANGED: through
+   a projection's rename, a grouping key, a join (a joined side's `_right` name included) and a grouped operand's
+   output, and never through a derivation, a pick (D18.4), a union, a pivot or a model step. A derivation's nulls are
+   its own, and may say anything about the key it read (a derivation null exactly when the key is one value is a
+   test of that value), so the check does not read through one, as D19.2 does not for a relation. **Declined**, and
+   each stays a predicate on the key: a comparison with any other literal, with a parameter or with another column;
+   a `Coalesce` with any other fallback or a third member; an ordering against the empty text, which over text is
+   the same question but over any other type is not, and which the set does not need; a pattern; a length; a
+   membership, even of the empty text alone (the phase's charter keeps membership refused, and `Eq` asks it); and a
+   null test of an expression over the column (`Upper`, `Trim`), whose answer is the expression's.
+
+2. **Where it is admitted: a filter's predicate and a `Case`'s condition**, anywhere inside either, beside reads of
+   other columns, in the pipeline and in a grouped operand. A presence test elsewhere in a `Derive` (a boolean
+   column computed as `IsNull` of the key) carries the key as before: it is the same bit, and the phase's charter
+   places the admission at the condition, where the consumer writes it; a host writes the column as a `Case`. Under
+   `Aggregate` nothing changes, and a presence test is refused as D5.4 refuses it: that level withholds the
+   column's rows one by one, and whether a given row holds a value is one row's fact about it. `Keyed` withholds the
+   value and the grain, and a presence answers neither.
+
+3. **Its result is not the key.** The walk records what a presence test reads as the column's presence, apart from
+   its value. Under `Keyed` a presence is neither the key's value nor its grain: a label chosen by one may be grouped
+   on, sorted by, joined on and returned, and a grouping keyed on such a label does not set the key's grain (D18.3).
+   The branches of the `Case` keep their own lineage, so a branch or a default that answers the key is still the key
+   (`DB-GRANT-KEY-IN-RESULT` when returned, `DB-GRANT-KEY-ONLY` when sorted by), and so is a `Coalesce` of it. Under
+   `Aggregate` and `RowLevel` a presence is the column's row value exactly as before, so nothing a subject holding
+   either level reads moves: the same pipelines are refused with the same refusals, and the floor counts the same
+   columns.
+
+4. **What it does not change.** The grain ruling (D18.3): a presence filter after a grouping keyed on the key leaves
+   the rows at its grain, and the result is refused as `KeyGrain`. The key-in-result ruling, the picks (D18.4) and the
+   group floor (D18.5) stand as written. The floor counts a keyed column's values and picks, which is what it was
+   written over; a presence folded into an aggregate is neither, and is counted only under `Aggregate`, where it is
+   the column's row value.
+
+5. **The proof on the staged shapes.** All six are admitted under the subject holding the keys at `Keyed` and every
+   other column row by row, as written: the five that end in a grouping lower in full with an empty local suffix in
+   the reference dialect and both shipped dialects, and the sixth places its boundary at its first cast, right after
+   the grouping to its grain. The lowering and placement acceptance moved from the row-level grant to the keyed one,
+   and the tests that pinned the two refusals now pin the admissions, each naming the presence test's column at the
+   keyed level among the granted columns. Seen red: with the walk of 0.4.0 before this phase, six tests fail, the
+   admissions among them. The policy tests pin the smuggling cases by name: a comparison with a non-empty literal
+   either way, with a parameter, with another key outside a join, an ordering, a pattern, a length, a membership, a
+   null test of an expression over the key, a presence test of a `Case` that answers the key, a presence test of a
+   derived name (an identity derivation included) and of a key's pick, a `Case` whose branch answers the key
+   (returned, and sorted by), the key's `Coalesce` returned, a bare null test returned, and a presence filter that
+   does not reset the key's grain.
+
+6. **A finding the floor stands on: the shoppers roll-up is emptied under the keyed grant.** Its last grouping
+   counts four columns carrying the customer key, three of them chosen by a condition (the shoppers with a spend, the
+   new ones, the returning ones). Under `Keyed` the floor counts each (D18.5) and keeps a group only when each has a
+   member, so a group with no new shopper, or none returning, is dropped; on the staged rows no group has both, and the
+   reference answers no rows. The other five shapes answer exactly what they answer under the row-level grant, and a
+   test pins both facts. The floor stands as written, as this phase was charged: a consumer counting several
+   conditional copies of a key in one grouping, under a keyed grant, loses each group where any copy has no member.
+   *Reopen* D18.5 if such a roll-up is wanted with a floor, with an argument for counting the group's rows rather
+   than each keyed input's members, or for withholding one aggregate below the floor rather than its group.
+
+7. **The surface.** No public member is added or removed, and no wire moves: a refusal is narrowed. Pipelines that
+   0.3.0 and Phase 40 refused under `Keyed` as `KeyOnly` or `KeyInResult` because they tested a key's presence are
+   admitted; under `Aggregate` and `RowLevel` nothing moves.
+
+**The evidence.** SQL Server 2025 LocalDB 17.0.4025.3 (Express Edition, 64-bit), collation
+`SQL_Latin1_General_CP1_CI_AS`: the six shapes, admitted under the keyed grant, agreed with the reference; the kit's
+112 fixtures, 110 agreed and 2 differing as pinned, 0 differing unexpectedly. PostgreSQL 18.6 (Debian
+18.6-1.pgdg13+2, 64-bit) in a local container, database collation `en_US.utf8`: the six shapes agreed; 112
+fixtures, 111 agreed, 1 differing as pinned, 0 differing unexpectedly, and over the ICU root locale 111, 1 and 0.
+No conformance database survived either run.
+
 ## 2026-11-17 — D19: a declared relation is followed through a rename and after a grouping (Phase 41)
 
 D4.2 admits a join only along a relation the model declares. The check compared the join's column names with the
@@ -84,7 +164,10 @@ written as they are. Seven rulings.
    together, pinned by a test that names each refusal: the check and the provider admit and lower the shapes as
    written, and what refuses them is the policy's ruling, which this phase does not amend. *Reopen* D18.2 if a
    null test of a key (one bit, answered for a whole group) should be admitted as a predicate or a condition, or
-   the consumer writes those two tests over a column that is not a key.
+   the consumer writes those two tests over a column that is not a key. *Closed 2026-11-17 (D20, Phase 42):* the
+   first condition was met. D18.2 now admits a presence test of a keyed column as a filter predicate and as a
+   `Case`'s condition, and its answer carries no lineage of the column, so all six shapes are admitted under the
+   keyed grant as written.
 
 **The evidence.** SQL Server 2025 LocalDB 17.0.4025.3 (Express Edition, 64-bit), collation
 `SQL_Latin1_General_CP1_CI_AS`, through the instance's named pipe with `Encrypt=false`: 112 fixtures, 110 agreed,
@@ -115,6 +198,12 @@ cube, the second admits a statement returning the keys. This decision adds the l
    carries its value, under any name and through any derivation, is refused as `KeyInResult`
    (`DB-GRANT-KEY-IN-RESULT`), naming the result column and the model column. Lineage is the walk D5.3 already
    makes, so a rename, a `Derive`, a join's `_right` suffix and an operand's output do not get the value out.
+   *Amended 2026-11-17 (D20, Phase 42):* the first consumer's pipelines test whether a key is present (a filter
+   keeping the rows with a non-blank customer key, and labels chosen by whether a left join found a line), and this
+   ruling refused both as predicates on the key (D19.7). A presence test, D20.1's closed set of forms over a name
+   carrying the column unchanged, is admitted as a filter predicate and as a `Case`'s condition, and the value it
+   answers carries no lineage of the column. Every other predicate stays refused as written, as do the branches of
+   a `Case`, which keep their own lineage.
 
 3. **A result still at the key's grain is refused.** The walk now tracks the model columns the rows are grouped
    or joined on: a grouping sets them to its keys (a `Pivot` index and a fit's group keys likewise), and a join of
