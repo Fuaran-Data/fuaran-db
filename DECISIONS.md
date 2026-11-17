@@ -1,5 +1,98 @@
 # Fuaran.DB — decisions (newest first)
 
+## 2026-11-17 — D19: a declared relation is followed through a rename and after a grouping (Phase 41)
+
+D4.2 admits a join only along a relation the model declares. The check compared the join's column names with the
+relation's as written, at the step where the join stands, while the provider already followed each left key to the
+model column it came from (D4.3) and policy follows every read the same way (D5.3). So a join written after the
+left key was renamed was refused as undeclared although it joins the declared columns, and the first consumer's
+staged pipelines (an order stage and a shopper stage, each a grouping, then joins on their keys) could not be
+written as they are. Seven rulings.
+
+1. **The check follows lineage.** Each column name reaching a step resolves to the model column it carries
+   unchanged, or to what took it away. A projection carries its sources under their new names; a join to a
+   model table or to a grouped operand brings in the right side's columns, a name the left already carries
+   suffixed `_right` as the reference names it (an operand's columns through `Operand.provenance`, D16.2); a
+   grouping keeps its keys; an intersection or a difference keeps the left rows. A join is admitted when every
+   left key resolves to a column of one table, and the model declares a relation between that table and the joined
+   one on exactly those column pairs, either way round. A key that resolves to nothing is refused as
+   `UnresolvedJoinKey`, naming what it resolved to: "is derived at step 3", "is the aggregate Max of 'customer_id'
+   at step 1, where the grouping keeps 'channel' as its keys", "comes through the union at step 1". A key that
+   resolves to a model column on no declared pair is `UnrelatedJoin`, as before.
+
+2. **A derivation is not a model column, even one that copies.** `Derive("k", Col "k")` resolves to "is derived";
+   so does a window's output, a pivot's or unpivot's value columns, and everything after a union or a model step.
+   The relation is a statement about model columns, and a derivation is a statement about an expression; the check
+   does not read expressions to decide whether one is the identity. **This newly refuses** two shapes 0.3.0's check
+   admitted by name: a derivation or an aggregate given the relation's column name, and a key renamed to that name
+   from another column. 0.3.0's provider never lowered either (its lowering already read lineage), so a host that
+   reached the provider through the check ran them locally; now the check names them. Nothing that resolves to the
+   declared columns is refused, and nothing is newly admitted that 0.3.0 refused for a reason other than its name.
+
+3. **A grouping keeps or loses a relation, and the refusal says which.** A grouping whose keys include the
+   relation's column keeps it; an aggregate of the column, `Max` included, loses it, and the refusal names the
+   aggregate and the keys the grouping kept. A grouping that drops the column leaves a name the rows do not carry,
+   refused as `UnknownColumn` with the members that remain. This is stricter than D18.4, which holds a key's `Min`,
+   `Max` or `Median` as the key for policy: a pick answers one of the group's values, but the relation is between
+   columns, and the check does not admit an aggregate as a column. A pipeline that wants the key after a grouping
+   keeps it as a grouping key, which is how the acceptance pack's order stage is written (ruling 6). *Reopen if* a
+   consumer needs a pick of a key to join, with an argument that the check can verify the pick is functional.
+
+4. **The provider needed no new form.** The premise was that the provider must learn to lower a join whose left
+   side is a grouped pipeline. Checked against the tree: every relation already renders as a nested select, so the
+   left side of a join is a derived table whatever it holds, and the lowering already followed each key through
+   renames and grouping keys (`Col.Origin`). What placed the boundary in the measurement the phase was filed from
+   was a key taken as an aggregate (`Max` of the customer key, grouped on the order key), which has no origin; with
+   the key kept as a grouping key the same pipeline lowered in full. The phase therefore changes no lowering and no
+   dialect, and every statement 0.3.0 wrote is the same text. It adds what proves the form: the placement laws gain
+   the law "a join whose left side is a grouping on the relation's key, or whose key a projection renamed, equals the
+   reference's join", with sample adequacy over each kind and the renamed key, eight templates (four kinds after a
+   grouping, a rename, a grouped left side joined to a grouped operand, a re-aggregation after the join, and a key
+   the grouping aggregated, which places the boundary), and its falsifier as a permanent test: an engine whose join
+   matches a null key, which the null key's group exposes. Widening the sample left `unpinnedClock` unreached on the
+   fixed seed; the generator now draws a case with no pinned clock a third of the time, and two more templates read
+   the clock, so the refusal is reached by the draw rather than by hunting a seed. The kit gains `Fixtures.staged`,
+   five fixtures over a seed whose customer key holds a null and repeats.
+
+5. **What still does not lower is stated.** A join between two stages neither of which is a model table is refused
+   by the check by name (`UnknownTable`): the model holds no such source, and a stage is not an operand, which
+   reads one table. A host joins two results itself. A tail `Unpivot` never lowers (`VerbNotLowered`), and a cast
+   to decimal is outside the subset (`ConstructExcluded`). `FoldSplit.suffix` answers the planned steps after the
+   boundary, and `FoldSplit.describe` names them, so a host can assert that its suffix neither groups nor joins:
+   that it reads only rows already at the grain it returns.
+
+6. **The acceptance pack: the first consumer's shapes, as structure.** The test sample gains a neutral retail model
+   (order headers, order lines, customers, web orders; an order key and a customer key, classified together; three
+   relations; a group floor of one) and six pipelines with the consumer's structure: an order stage grouping the
+   counted orders on both keys, then a left join to a grouped shopper operand on the customer key and to a grouped
+   attribution operand on the order key, derived labels, and a projection renaming the keys; a line stage joining
+   the lines on the renamed order key, after the grouping; and five roll-ups to a coarser grain (orders, lines,
+   shoppers, new shoppers' products, campaigns) and a sixth (quality checks) that joins a first-orders operand on the
+   shopper's suffixed key, re-aggregates by day and store, and ends in casts and an unpivot. Each ends in `Sort`
+   then `Limit`, and each uses deterministic aggregates (`Max` where the consumer wrote `First`). Under a grant
+   holding the keys row by row, the five lower in full with an empty local suffix in the reference dialect and both
+   shipped dialects, and the sixth places its boundary at its first cast, right after the grouping to its grain;
+   all six equal the reference evaluator through the in-memory interpreter and on both engines.
+
+7. **Under the keyed grant, two refusals of D18 meet the shapes, and neither is bent.** The order stage keeps the
+   orders of a known customer with a predicate on the customer key (a non-blank test), which D18.2 refuses as
+   `KeyOnly` ("a filter predicate"); every shape inherits it. With that predicate alone removed, the orders,
+   shoppers and campaigns shapes lower in full under the keyed grant and the quality shape to its grain; the lines
+   and new-products shapes are still refused, because the line stage marks an order without lines by testing the
+   line's order key for null inside the derives of its labels, so policy's lineage carries the key into those labels,
+   and sorting by a label is a key used as a sort key. Both are findings about the keyed level and the shapes
+   together, pinned by a test that names each refusal: the check and the provider admit and lower the shapes as
+   written, and what refuses them is the policy's ruling, which this phase does not amend. *Reopen* D18.2 if a
+   null test of a key (one bit, answered for a whole group) should be admitted as a predicate or a condition, or
+   the consumer writes those two tests over a column that is not a key.
+
+**The evidence.** SQL Server 2025 LocalDB 17.0.4025.3 (Express Edition, 64-bit), collation
+`SQL_Latin1_General_CP1_CI_AS`, through the instance's named pipe with `Encrypt=false`: 112 fixtures, 110 agreed,
+2 differing as pinned (as in D16), 0 differing unexpectedly; the six shapes agreed. PostgreSQL 18.6 (Debian
+18.6-1.pgdg13+2, 64-bit) in a local container, database collation `en_US.utf8`: 112 fixtures, 111 agreed, 1
+differing as pinned, 0 differing unexpectedly; the six shapes agreed; over the ICU root locale, 111, 1 and 0. Every
+new fixture agreed on both engines. No conformance database survived either run.
+
 ## 2026-11-17 — D18: a keyed grant, under which a classified column keys a grouping or a join and never reaches the result (Phase 40)
 
 A grant had two levels. Under `Aggregate` a grouping key and a join key are row-wise uses and are refused (D5.4), and

@@ -114,6 +114,33 @@ line it advances the minor. Built against the same line as 0.3.0, `Fuaran.Core.*
   `wire-fixtures/session/streams/keyed.jsonl` are added.
 - **The conformance set**: every emitted file is re-stamped with the kit version, 0.4.0. No fixture content moves.
 
+A declared relation is followed through a rename and after a grouping (Phase 41, DECISIONS.md D19). It rides this
+draft: its one surface change of the highest class is a closed union gaining a case, which is the class the draft
+already carries, so no number moves.
+
+- **Breaking — `PipelineRefusal` gains `UnresolvedJoinKey`**: a join key that carries no model column (a
+  derivation, an aggregate, a column after a union, a pivot, an unpivot or a model step), naming what it resolved
+  to. A closed union gaining a case breaks every exhaustive match a consumer has written.
+- **The check, by lineage (D19)**: `PipelineCheck.check` and `checkWith` follow each join key to the model column it
+  came from, through a rename, a join's `_right` suffix and a grouping that keeps it as a key, and match the
+  relation on model columns. Newly admitted: a join on a renamed key, on a key a grouping kept, on a joined table's
+  suffixed key, and to a grouped operand from a renamed key; each was refused for its name alone. **Newly refused**:
+  a join on a key a derivation or an aggregate produced under the relation's column name, or on a key renamed to
+  that name from another column. 0.3.0's check admitted those by name, and its provider never lowered them; they
+  are now `UnresolvedJoinKey` or `UnrelatedJoin` at the check, before any policy.
+- **The provider, unchanged in form**: a join whose left side is a grouping lowers as a join of two derived tables,
+  as every relation renders, and it now reaches the provider because the check admits it. Every dialect's
+  statement for a pipeline 0.3.0 lowered is the same text.
+- **Additive — `FoldSplit.suffix`**: the planned steps after the boundary. `FoldSplit.describe` adds one sentence
+  naming them where a boundary falls.
+- **The placement laws**: one law (a join after a grouping or a rename equals the reference's) with its sample
+  adequacy over every kind and the renamed key, and ten sample templates (two of them reading the clock); the
+  generator draws a case with no pinned clock a third of the time, where it drew one a quarter of the time. Read
+  laws by name, not by position.
+- **The conformance set**: `Fixtures.staged`, five fixtures (`join-after-grouping-left`, `-inner`, `-anti`,
+  `join-after-rename`, `join-after-grouping-rollup`), is added to `Fixtures.all`, 112 in all, with their files and
+  the manifest. No existing fixture moves.
+
 ### 0.3.0
 
 A recording session admits and records a request's grouped operands (Phase 36, DECISIONS.md D17). 0.2.0 is

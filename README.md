@@ -30,8 +30,9 @@ Pre-release, on the `0.x` line. 0.1.0, 0.2.0 and 0.3.0 of the six packages (`Fua
 `Fuaran.Compute.DataFrame` 0.44.0.
 
 `Fuaran.DB` holds the dataset model: its node kinds and op vocabulary, the model rules, the
-check of a pipeline against a model, seeding and drift against a reported schema, a canonical wire codec with
-its conformance corpus in [`wire-fixtures/`](wire-fixtures/), and an AI-tools surface. It also holds the
+check of a pipeline against a model (which follows each join key through renames, joins and the groupings that
+keep it to the model column it came from, and matches the declared relation on model columns), seeding and drift
+against a reported schema, a canonical wire codec with its conformance corpus in [`wire-fixtures/`](wire-fixtures/), and an AI-tools surface. It also holds the
 policy: for a subject the host supplies, column grants, row policies, cost limits and a minimum group size
 decide on the tree whether a pipeline is admitted, refusing by name or rewriting visibly. A grant reads a
 classification in aggregate only, as a key (a grouping or join key whose value and grain never reach the
@@ -48,9 +49,9 @@ refusals that set where the split falls, and the placement laws a dialect is cer
 `Fuaran.DB.Dialect.SqlServer` is the first dialect, T-SQL, its refusals and pinned differences named in
 [its README](src/Fuaran.DB.Dialect.SqlServer/README.md). `Fuaran.DB.Dialect.PostgreSql` is the second,
 written to find what the first left in the provider; it reads every string under the `C` collation through
-the seam that moved for it, and [its README](src/Fuaran.DB.Dialect.PostgreSql/README.md) names its refusals and pins. It has been certified over the
-in-memory interpreter only: no PostgreSQL engine run is recorded yet, and the suite arms that leg when
-`FUARAN_DB_POSTGRESQL` holds a connection string. `Fuaran.DB.Conformance` is the kit a
+the seam that moved for it, and [its README](src/Fuaran.DB.Dialect.PostgreSql/README.md) names its refusals and pins; its engine runs are recorded
+in [`DECISIONS.md`](DECISIONS.md), and the suite arms that leg when `FUARAN_DB_POSTGRESQL` holds a connection
+string. `Fuaran.DB.Conformance` is the kit a
 dialect is certified with: a seed, stated fixtures with the reference's answers (emitted to [`conformance/`](conformance/)),
 and a runner over the host's executor.
 `Fuaran.DB.Session` is the connection record. It holds what passed over a connection as a hash-chained
