@@ -383,23 +383,33 @@ module Policy =
     /// The model columns a name carries: as row values (`Raw`), and folded into an aggregate (`Agg`).
     /// `Picked` is the part of `Agg` folded into an aggregate whose answer is one of the group's values
     /// (`Min`, `Max`, `Median`): under a keyed grant that answer is a key (D18), under any other it
-    /// is an aggregate.
+    /// is an aggregate. `Tested` is the model columns whose presence, and nothing else of them, the
+    /// value answers (D20): under a keyed grant that answer is not the key, under any other it is the
+    /// column's row value, as it was. `Exact` is the model column a name carries unchanged, through
+    /// renames, grouping keys and joins and never through a derivation: the only kind of name whose
+    /// presence a presence test answers.
     type private Lin =
         { Raw: Set<ColumnRef>
           Agg: Set<ColumnRef>
-          Picked: Set<ColumnRef> }
+          Picked: Set<ColumnRef>
+          Tested: Set<ColumnRef>
+          Exact: ColumnRef option }
 
     let private noLin =
         { Raw = Set.empty
           Agg = Set.empty
-          Picked = Set.empty }
+          Picked = Set.empty
+          Tested = Set.empty
+          Exact = None }
 
     let private rawLin (c: ColumnRef) = { noLin with Raw = Set.singleton c }
 
     let private join (a: Lin) (b: Lin) =
         { Raw = a.Raw + b.Raw
           Agg = a.Agg + b.Agg
-          Picked = a.Picked + b.Picked }
+          Picked = a.Picked + b.Picked
+          Tested = a.Tested + b.Tested
+          Exact = if a.Exact = b.Exact then a.Exact else None }
 
     /// What a name carries that a keyed grant holds as a key's value: its row values and its picks.
     let private asKey (l: Lin) = l.Raw + l.Picked
@@ -450,11 +460,12 @@ module Policy =
         { Cols =
             Model.columns node
             |> List.map (fun (_, c) ->
-                c.Name,
-                rawLin
+                let col =
                     { Table = spec.Name
                       Column = c.Name
-                      Classification = c.Classification })
+                      Classification = c.Classification }
+
+                c.Name, { rawLin col with Exact = Some col })
           Rest = mark |> Option.map (fun m -> withheldLin m spec.Name)
           Keys = Set.empty }
 
@@ -483,6 +494,71 @@ module Policy =
         | Some _, None -> a
         | None, _ -> b
 
+    // ---- a presence test: whether a row has a key, never which (D20) ----
+
+    /// The name a presence test asks about, when `e` is one: a null test of the name, or a comparison
+    /// (`Eq` or `Ne`) of the name, or of its `Coalesce` with the empty text, against the empty text,
+    /// either way round. Its negation is `Not` of one, which the walk below reaches. The set is closed:
+    /// a comparison with any other literal, a parameter or a column, a pattern, an ordering, a length
+    /// and a membership are not presence tests, and read the name as any expression does.
+    let private presenceOf (e: ColExpr) : string option =
+        let empty (x: ColExpr) =
+            match x with
+            | Lit(Str "") -> true
+            | _ -> false
+
+        let asked (x: ColExpr) =
+            match x with
+            | Col n
+            | Coalesce [ Col n; Lit(Str "") ] -> Some n
+            | _ -> None
+
+        match e with
+        | IsNull(Col n) -> Some n
+        | Binary((Eq | Ne), a, b) when empty b -> asked a
+        | Binary((Eq | Ne), a, b) when empty a -> asked b
+        | _ -> None
+
+    /// The lineage of each read of an expression, left to right as `Reads.ofExpr` lists them, except
+    /// that inside a condition (`tests`: a filter's predicate, a `Case`'s conditions) a presence test of
+    /// a name carrying one model column unchanged is one read answering that column's presence only.
+    /// A name a derivation produced is not tested this way, even one whose lineage is a key: its
+    /// nulls are the derivation's, and may say anything about the key it read.
+    let rec private exprLins (flow: Flow) (tests: bool) (e: ColExpr) : Lin list =
+        let within = exprLins flow tests
+
+        let tested =
+            if tests then
+                presenceOf e |> Option.bind (fun n -> (linOf flow n).Exact)
+            else
+                None
+
+        match tested with
+        | Some c -> [ { noLin with Tested = Set.singleton c } ]
+        | None ->
+            match e with
+            | Col c -> [ linOf flow c ]
+            | Lit _
+            | Param _
+            | Now _
+            | Arg _ -> []
+            | Binary(_, a, b)
+            | Quotient(a, b, _) -> within a @ within b
+            | Not x
+            | IsNull x
+            | Cast(_, x)
+            | Convert(x, _)
+            | Rounded(x, _)
+            | InParam(x, _)
+            | Interpolate(x, _, _, _) -> within x
+            | Coalesce xs
+            | ApplyFn(_, xs)
+            | Call(_, xs) -> xs |> List.collect within
+            | Case(cases, els) ->
+                (cases |> List.collect (fun (w, t) -> exprLins flow true w @ within t))
+                @ within els
+            | InList(x, items) -> within x @ (items |> List.collect within)
+
     /// The lineage flowing out of one step.
     let private advance
         (mark: string option)
@@ -510,7 +586,7 @@ module Policy =
                 Rest = None }
         | Derive(name, e) ->
             { flow with
-                Cols = upsert name (linOfAll flow (Reads.ofExpr e)) flow.Cols }
+                Cols = upsert name (exprLins flow false e |> List.fold join noLin) flow.Cols }
         | GroupBy(keys, aggs) ->
             { Cols =
                 (keys |> List.map (fun k -> k, linOf flow k))
@@ -531,10 +607,11 @@ module Policy =
                            | First
                            | Last -> Set.empty
 
+                       // A presence folded into an aggregate is an aggregate's input like any row value.
                        a.Name,
-                       { Raw = Set.empty
-                         Agg = l.Raw + l.Agg
-                         Picked = picked }))
+                       { noLin with
+                           Agg = l.Raw + l.Agg + l.Tested
+                           Picked = picked }))
               Rest = None
               // A grouping sets the grain: the rows are now one per value of its keys.
               Keys = keys |> List.map (linOf flow >> asKey) |> Set.unionMany }
@@ -685,7 +762,7 @@ module Policy =
             ns |> List.map (fun n -> linOf flow n, u)
 
         match step with
-        | Filter p -> names (Expose "a filter predicate") (Reads.ofExpr p)
+        | Filter p -> exprLins flow true p |> List.map (fun l -> l, Expose "a filter predicate")
         | Project pairs -> names Carry (pairs |> List.map fst)
         | Derive(_, e) -> names Carry (Reads.ofExpr e)
         | GroupBy(keys, aggs) ->
@@ -764,14 +841,17 @@ module Policy =
         : Result<(ColumnRef * GrantLevel) list, PolicyRefusal> =
         let granted = subject.Grants |> List.map _.Classification |> List.distinct
 
-        Set.toList (lin.Raw + lin.Agg)
+        // A presence is the column's row value to every level but `Keyed` (D20).
+        let rowValues = lin.Raw + lin.Tested
+
+        Set.toList (rowValues + lin.Agg)
         |> List.fold
             (fun acc c ->
                 acc
                 |> Result.bind (fun seen ->
                     match level subject.Grants c.Classification with
                     | None -> Error(PolicyRefusal.ColumnNotGranted(at, c, granted))
-                    | Some GrantLevel.Aggregate when lin.Raw.Contains c ->
+                    | Some GrantLevel.Aggregate when rowValues.Contains c ->
                         match how with
                         | Expose usage
                         | Key usage -> Error(PolicyRefusal.AggregateOnly(at, c, usage))
@@ -789,14 +869,15 @@ module Policy =
             (Ok [])
 
     /// The columns `lin` carries that a grouping over it must floor: the row values of an aggregate-only
-    /// column, and a keyed column's values and picks (ruling 5 holds for both levels, D18).
+    /// column, its presence included, and a keyed column's values and picks (ruling 5 holds for both
+    /// levels, D18). A keyed column's presence is not its value, and needs no floor (D20).
     let private aggregateOnly (subject: Subject) (lin: Lin) : ColumnRef list =
-        asKey lin
+        asKey lin + lin.Tested
         |> Set.toList
         |> List.filter (fun c ->
             match level subject.Grants c.Classification with
-            | Some GrantLevel.Aggregate -> lin.Raw.Contains c
-            | Some GrantLevel.Keyed -> true
+            | Some GrantLevel.Aggregate -> (lin.Raw + lin.Tested).Contains c
+            | Some GrantLevel.Keyed -> (asKey lin).Contains c
             | Some GrantLevel.RowLevel
             | None -> false)
 

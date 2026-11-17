@@ -237,7 +237,7 @@ let runAgainstServer (dialect: Dialect) (connectionString: string) : Report * st
         | Ok report -> report, version, collation
         | Error e -> failtestf "the seed could not be placed: %s" e)
 
-/// The staged shapes over the configured server (DECISIONS.md D19): each admitted under the row-level
+/// The staged shapes over the configured server (DECISIONS.md D19, D20): each admitted under the keyed
 /// grant, lowered through the dialect, run by the engine, its suffix finished, and compared with the
 /// reference. Answers each shape's name and whether it agreed, with both answers where it did not.
 let stagedAgainstServer (connectionString: string) : (string * Result<unit, string>) list =
@@ -255,7 +255,7 @@ let stagedAgainstServer (connectionString: string) : (string * Result<unit, stri
 
             [ for name, pipeline in Sample.Staged.shapes ->
                   name,
-                  match Sample.Staged.admit Sample.Staged.rowLevel pipeline with
+                  match Sample.Staged.admit Sample.Staged.subject pipeline with
                   | Error r -> Error(Policy.describe r)
                   | Ok admitted ->
                       Sample.Staged.placed SqlServer.dialect execute admitted

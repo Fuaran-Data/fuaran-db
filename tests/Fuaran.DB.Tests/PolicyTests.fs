@@ -1296,6 +1296,208 @@ let tests =
               | Ok _ -> ()
               | Error r -> failtestf "refused: %s" (Policy.describe r)
 
+          testCase
+              "a keyed column's presence may be tested in a filter or a case's condition, and the test is not the key"
+          <| fun _ ->
+              let admitted (label: string) (steps: Transform list) =
+                  match keyedAdmit keyholder steps with
+                  | Ok a ->
+                      let granted =
+                          a.Applied
+                          |> List.collect (function
+                              | PolicyRule.ColumnsGranted cs -> cs
+                              | _ -> [])
+
+                      Expect.contains granted (deptCol "depts", GrantLevel.Keyed) (label + ": at the keyed level")
+                  | Error r -> failtestf "%s: %s" label (Policy.describe r)
+
+              let blank = str ""
+              let dept = Col "dept"
+
+              // the closed set (D20.1), each as a filter predicate
+              for label, test in
+                  [ "a null test", IsNull dept
+                    "its negation", Not(IsNull dept)
+                    "equal to the empty text", Binary(Eq, dept, blank)
+                    "unequal to the empty text, written the other way round", Binary(Ne, blank, dept)
+                    "its coalesce with the empty text, against the empty text",
+                    Binary(Ne, Coalesce [ dept; blank ], blank)
+                    "beside a predicate on another column",
+                    Binary(And, Not(IsNull dept), Binary(Eq, Col "region", str "north")) ] do
+                  admitted label (Filter test :: keyedTail)
+
+              // a label chosen by a presence test may be grouped on, sorted by and returned
+              let label = Derive("staffed", Case([ IsNull dept, str "no" ], str "yes"))
+
+              admitted
+                  "a label grouped on and sorted by"
+                  [ label
+                    GroupBy([ "staffed" ], [ agg "total" Sum "budget" ])
+                    Sort [ Slot.Lit "staffed", Asc ]
+                    page 5 ]
+
+              admitted
+                  "a label returned row by row"
+                  [ label; Project [ "region", "region"; "staffed", "staffed" ]; page 5 ]
+
+              admitted
+                  "a condition mixing a presence test with another column"
+                  [ Derive(
+                        "band",
+                        Case([ Binary(And, Not(IsNull dept), Binary(Eq, Col "region", str "north")), str "a" ], str "b")
+                    )
+                    Project [ "band", "band" ]
+                    page 5 ]
+
+              // the joined side's key, carried unchanged into the rows, is tested the same way
+              admitted
+                  "the joined side's key"
+                  [ Join(Ref "payroll", onDept, Left)
+                    Derive("paid_band", Case([ IsNull(Col "dept_right"), str "unpaid" ], str "paid"))
+                    GroupBy([ "paid_band" ], [ agg "total" Sum "budget"; agg "depts" Count "dept" ])
+                    Sort [ Slot.Lit "paid_band", Asc ]
+                    page 5 ]
+
+          testCase "every other way of reading a keyed column through a test is refused by name"
+          <| fun _ ->
+              let refusal (steps: Transform list) =
+                  match keyedAdmit keyholder steps with
+                  | Error r -> r
+                  | Ok a -> failtestf "admitted: %A" a.Pipeline
+
+              let keyOnlyAt (step: int) (usage: string) =
+                  PolicyRefusal.KeyOnly(PolicySite.Step step, deptCol "depts", usage)
+
+              let blank = str ""
+              let dept = Col "dept"
+
+              // what a test reveals beyond present or absent stays a predicate on the key (D20.1)
+              for label, test in
+                  [ "equal to a non-empty literal", Binary(Eq, dept, str "eng")
+                    "unequal to a non-empty literal", Binary(Ne, dept, str "eng")
+                    "its coalesce compared with a non-empty literal", Binary(Eq, Coalesce [ dept; blank ], str "eng")
+                    "its coalesce with another value", Binary(Eq, Coalesce [ dept; str "eng" ], blank)
+                    "its coalesce with another column", Binary(Eq, Coalesce [ dept; Col "region" ], blank)
+                    "a parameter", Binary(Eq, dept, Param "dept")
+                    "an ordering against the empty text", Binary(Gt, dept, blank)
+                    "a pattern", Binary(StartsWith, dept, str "e")
+                    "a length", Binary(Eq, ApplyFn(Length, [ dept ]), Lit(Int 0))
+                    "a membership", InList(dept, [ blank ])
+                    "a null test of an expression over it", IsNull(ApplyFn(Upper, [ dept ]))
+                    "a presence test of a case that answers the key",
+                    Binary(Eq, Case([ IsNull dept, blank ], dept), blank) ] do
+                  Expect.equal (refusal (Filter test :: keyedTail)) (keyOnlyAt 1 "a filter predicate") label
+
+              // two keys compared outside a join
+              Expect.equal
+                  (refusal
+                      [ Join(Ref "payroll", onDept, Inner)
+                        Filter(Binary(Eq, dept, Col "dept_right"))
+                        GroupBy([ "region" ], [ agg "depts" Count "dept" ])
+                        page 5 ])
+                  (keyOnlyAt 2 "a filter predicate")
+                  "two keys compared outside a join"
+
+              // a derivation's nulls are its own: a presence test of a derived name is a test of what it read
+              for label, derived in
+                  [ "an identity derivation", dept
+                    "a derivation null exactly when the key is one value",
+                    Case([ Binary(Eq, dept, str "eng"), Lit Null ], str "x") ] do
+                  Expect.equal
+                      (refusal (Derive("d", derived) :: Filter(IsNull(Col "d")) :: keyedTail))
+                      (keyOnlyAt 2 "a filter predicate")
+                      label
+
+              // a pick of the key is the key (D18.4), and its presence is not tested this way
+              Expect.equal
+                  (refusal
+                      [ GroupBy([ "region" ], [ agg "m" Max "dept" ])
+                        Filter(IsNull(Col "m"))
+                        GroupBy([], [ agg "n" Count "region" ])
+                        page 5 ])
+                  (keyOnlyAt 2 "a filter predicate")
+                  "the presence of a key's pick"
+
+              // the bit is not the key, and the branches still are: a branch that answers the key returns it
+              let returned (derived: ColExpr) =
+                  refusal [ Derive("x", derived); Project [ "region", "region"; "x", "x" ]; page 5 ]
+
+              for label, derived in
+                  [ "a case whose branch answers the key", Case([ IsNull dept, str "none" ], dept)
+                    "a case answering the key when it is present", Case([ Not(IsNull dept), dept ], str "none")
+                    "the key's coalesce", Coalesce [ dept; blank ]
+                    "a null test outside a condition", IsNull dept
+                    "a case on a non-presence condition", Case([ Binary(Eq, dept, str "eng"), str "a" ], str "b") ] do
+                  Expect.equal (returned derived) (PolicyRefusal.KeyInResult("x", deptCol "depts")) label
+
+              // and sorting by a label whose branch answers the key sorts by the key
+              Expect.equal
+                  (refusal
+                      [ Derive("x", Case([ IsNull dept, str "none" ], dept))
+                        Sort [ Slot.Lit "x", Asc ]
+                        GroupBy([ "region" ], [ agg "n" Count "x" ])
+                        page 5 ])
+                  (keyOnlyAt 2 "a sort key")
+                  "a sort by a branch that answers the key"
+
+              // a presence filter does not reset a grain (D18.3)
+              Expect.equal
+                  (refusal
+                      [ GroupBy([ "dept" ], [ agg "b" Sum "budget" ])
+                        Filter(Not(IsNull dept))
+                        Project [ "b", "b" ]
+                        page 5 ])
+                  (PolicyRefusal.KeyGrain(deptCol "depts"))
+                  "the key's grain, filtered on presence"
+
+          testCase "under an aggregate grant a presence test is refused as it was"
+          <| fun _ ->
+              let aggregator =
+                  { keyholder with
+                      Principal = "aggregator"
+                      Grants =
+                          [ grant "public" GrantLevel.RowLevel
+                            grant "internal" GrantLevel.Aggregate
+                            grant "personal" GrantLevel.Aggregate ] }
+
+              let refusal (steps: Transform list) =
+                  match keyedAdmit aggregator steps with
+                  | Error r -> r
+                  | Ok a -> failtestf "admitted: %A" a.Pipeline
+
+              Expect.equal
+                  (refusal
+                      [ Filter(Not(IsNull(Col "dept")))
+                        GroupBy([ "region" ], [ agg "n" Count "dept" ])
+                        page 5 ])
+                  (PolicyRefusal.AggregateOnly(PolicySite.Step 1, deptCol "depts", "a filter predicate"))
+                  "a presence filter"
+
+              Expect.equal
+                  (refusal
+                      [ Derive("staffed", Case([ IsNull(Col "dept"), str "no" ], str "yes"))
+                        Project [ "staffed", "staffed" ]
+                        page 5 ])
+                  (PolicyRefusal.AggregateOnly(PolicySite.Result, deptCol "depts", "a result column"))
+                  "a label chosen by a presence test, returned"
+
+              // a presence counted is a row value counted, so the floor still applies as it did
+              match
+                  keyedAdmit
+                      aggregator
+                      [ Derive("staffed", Case([ IsNull(Col "dept"), Lit(Int 0) ], Lit(Int 1)))
+                        GroupBy([ "region" ], [ agg "staffed" Sum "staffed" ])
+                        page 5 ]
+              with
+              | Ok a ->
+                  Expect.isTrue
+                      (a.Applied
+                       |> List.exists (function
+                           | PolicyRule.GroupFloorApplied(_, _, cs) -> List.contains (deptCol "depts") cs
+                           | _ -> false))
+                      "the floor counts the department"
+              | Error r -> failtestf "refused: %s" (Policy.describe r)
+
           testCase "a keyed grant governs an aggregate grant over the same classification; a row-level one governs both"
           <| fun _ ->
               let held (levels: GrantLevel list) =

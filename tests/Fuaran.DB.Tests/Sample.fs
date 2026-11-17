@@ -202,7 +202,8 @@ module Staged =
                         MinGroupSize = Some 1
                         TimeoutSeconds = Some 600 }) ] }
 
-    /// A subject holding the keys at Phase 40's level, and every other column row by row.
+    /// A subject holding the keys at Phase 40's level, and every other column row by row: the subject
+    /// every shape is admitted, lowered and run under (DECISIONS.md D20).
     let subject: Subject =
         { Principal = "staged"
           Attributes = Map.empty
@@ -574,8 +575,8 @@ module Staged =
               Project [ "day", "day"; "store", "store"; "variable", "check"; "value", "value" ] ]
           @ page [ "day"; "store"; "check" ] ]
 
-    /// The same subject with the keys held row by row: a diagnostic grant, under which the provider's
-    /// placement is measured apart from Phase 40's refusals.
+    /// The same subject with the keys held row by row: the grant whose answers the keyed grant's are
+    /// compared with (DECISIONS.md D20).
     let rowLevel: Subject =
         { subject with
             Grants = subject.Grants |> List.map (fun g -> { g with Level = GrantLevel.RowLevel }) }

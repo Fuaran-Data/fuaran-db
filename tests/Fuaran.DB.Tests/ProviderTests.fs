@@ -668,43 +668,39 @@ let tests =
 
               Expect.isFalse law.Passed "a null key matched after a grouping is caught"
 
-          testCase "under the keyed grant, the staged shapes meet Phase 40's refusals, each by name"
+          testCase "under the keyed grant, the staged shapes are admitted as written, their presence tests included"
           <| fun _ ->
-              // The order stage keeps the orders of a known customer by testing the customer key, a
-              // predicate; and the line stage marks an order without lines by testing the line's order key,
-              // which carries the key into the columns it derives and then sorts by. Phase 40 refuses both
-              // under a keyed grant (DECISIONS.md D18.2, D19).
+              // The order stage keeps the orders of a known customer by testing the customer key for
+              // presence, and the line stage labels an order without lines by testing the line's order key
+              // for null, then sorts by the labels. Phase 41 found both refused under the keyed grant
+              // (DECISIONS.md D19.7). Each answers whether a row has a key, never which (D20).
+              let keyedAt (table: string) (column: string) =
+                  { Table = table
+                    Column = column
+                    Classification = Sample.Staged.keyed },
+                  GrantLevel.Keyed
+
               for name, pipeline in Sample.Staged.shapes do
                   match Sample.Staged.admit Sample.Staged.subject pipeline with
-                  | Error(PolicyRefusal.KeyOnly(PolicySite.Step 1, c, usage)) ->
-                      Expect.equal (c.Table, c.Column) ("order_headers", "customer_key") (name + ": the column")
-                      Expect.stringContains usage "filter predicate" (name + ": the use")
-                  | other -> failtestf "%s: expected the key-only refusal at step 1, got %A" name other
+                  | Ok admitted ->
+                      let granted =
+                          admitted.Applied
+                          |> List.collect (function
+                              | PolicyRule.ColumnsGranted cs -> cs
+                              | _ -> [])
 
-              let withoutKeyTest (pipeline: Transform list) =
-                  match pipeline with
-                  | Filter(Binary(And, kept, _)) :: rest -> Filter kept :: rest
-                  | _ -> failtest "the order stage opens with its filter"
+                      Expect.contains granted (keyedAt "order_headers" "customer_key") (name + ": its presence test")
 
-              for name, pipeline in Sample.Staged.shapes do
-                  match name, Sample.Staged.admit Sample.Staged.subject (withoutKeyTest pipeline) with
-                  | ("lines" | "new_shopper_products"), Error(PolicyRefusal.KeyOnly(_, c, usage)) ->
-                      Expect.equal (c.Table, c.Column) ("order_lines", "order_key") (name + ": the column")
-                      Expect.stringContains usage "sort key" (name + ": the use")
-                  | ("orders" | "shoppers" | "campaigns" | "quality"), Ok admitted ->
-                      match FoldSplit.explain admitted d Bindings.none with
-                      | Ok report when name = "quality" ->
-                          Expect.isSome report.Boundary "the unpivot's cast runs locally"
-                      | Ok report -> Expect.isNone report.Boundary (name + " lowers in full under the keyed grant")
-                      | Error r -> failtestf "%s: %s" name (Refusal.describe r)
-                  | _, other -> failtestf "%s: %A" name other
+                      if name = "lines" || name = "new_shopper_products" then
+                          Expect.contains granted (keyedAt "order_lines" "order_key") (name + ": the line's key")
+                  | Error r -> failtestf "%s: %s" name (Policy.describe r)
 
           testCase
-              "under a row-level grant on the keys, five staged shapes lower in full in every dialect, and the sixth's prefix ends at its grain"
+              "under the keyed grant, five staged shapes lower in full in every dialect, and the sixth's prefix ends at its grain"
           <| fun _ ->
               for dialect in [ d; SqlServer.dialect; PostgreSql.dialect ] do
                   for name, pipeline in Sample.Staged.shapes do
-                      match Sample.Staged.admit Sample.Staged.rowLevel pipeline with
+                      match Sample.Staged.admit Sample.Staged.subject pipeline with
                       | Error r -> failtestf "%s: %s" name (Policy.describe r)
                       | Ok admitted ->
                           match FoldSplit.explain admitted dialect Bindings.none with
@@ -758,6 +754,40 @@ let tests =
 
                                   Expect.isEmpty local (name + ": an empty local suffix")
 
+          testCase
+              "under the keyed grant each staged shape answers what the row-level grant answers, but the shoppers roll-up, which the group floor empties"
+          <| fun _ ->
+              let answer (holder: Subject) (pipeline: Transform list) =
+                  match Sample.Staged.admit holder pipeline with
+                  | Ok admitted -> admitted, Sample.Staged.reference admitted
+                  | Error r -> failtestf "%s: %s" holder.Principal (Policy.describe r)
+
+              for name, pipeline in Sample.Staged.shapes do
+                  let admitted, keyed = answer Sample.Staged.subject pipeline
+                  let _, rows = answer Sample.Staged.rowLevel pipeline
+
+                  if name = "shoppers" then
+                      // Its grouping counts four keyed columns, three of them chosen by a condition, and
+                      // the floor keeps a group only when each has a member (D18.5): no group here has
+                      // both a new and a returning shopper. The floor stands as written (D20.6).
+                      let last =
+                          admitted.Applied
+                          |> List.choose (function
+                              | PolicyRule.GroupFloorApplied(step, _, cs) -> Some(step, cs)
+                              | _ -> None)
+                          |> List.maxBy fst
+
+                      Expect.equal
+                          (snd last |> List.map (fun c -> c.Table, c.Column))
+                          [ "order_headers", "customer_key" ]
+                          "the floor counts the customer key"
+
+                      Expect.isFalse (Fuaran.DB.Conformance.Kit.agrees true keyed rows) "the floor changes its answer"
+                  else
+                      Expect.isTrue
+                          (Fuaran.DB.Conformance.Kit.agrees true keyed rows)
+                          (sprintf "%s: %A against %A" name keyed rows)
+
           testCase "the staged shapes' placements equal the reference evaluator in every dialect"
           <| fun _ ->
               let execute (s: Statement) =
@@ -766,12 +796,14 @@ let tests =
 
               for dialect in [ d; SqlServer.dialect; PostgreSql.dialect ] do
                   for name, pipeline in Sample.Staged.shapes do
-                      match Sample.Staged.admit Sample.Staged.rowLevel pipeline with
+                      match Sample.Staged.admit Sample.Staged.subject pipeline with
                       | Error r -> failtestf "%s: %s" name (Policy.describe r)
                       | Ok admitted ->
                           let expected = Sample.Staged.reference admitted
 
                           match expected with
+                          | Ok t when name = "shoppers" ->
+                              Expect.equal (Table.rowCount t) 0 "the floor empties it (D20.6)"
                           | Ok t -> Expect.isGreaterThan (Table.rowCount t) 0 (name + ": the reference answers rows")
                           | Error e -> failtestf "%s: the reference refused: %A" name e
 
