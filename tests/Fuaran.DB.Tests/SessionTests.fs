@@ -415,6 +415,23 @@ let keyedStream () : Session =
 
     s'
 
+/// The keyed join re-aggregated to one row, counting the key and a copy of it no row holds: the floor
+/// counts both, and the copy's count is zero (DECISIONS.md D21).
+let keyedNone: Transform list =
+    [ Project [ "customer_id", "customer_id" ]
+      Join(Ref "spend", [ "customer_id", "customer_id" ], Inner)
+      Derive("never", Case([ Binary(Lt, Col "top", Lit(Int -1)), Col "customer_id" ], Lit Null))
+      GroupBy(
+          [],
+          [ { Name = "customers"
+              Fn = Count
+              Of = "customer_id" }
+            { Name = "nevers"
+              Fn = Count
+              Of = "never" } ]
+      )
+      Limit(Slot.Lit 10, Slot.Lit 0) ]
+
 let private seed = 19030
 let private iterations = 300
 
@@ -1355,6 +1372,35 @@ let tests =
               match (Session.account state "q2" |> Option.get).Verdict with
               | Some(Verdict.Refused("keyholder", code)) -> Expect.equal code "DB-GRANT-KEY-IN-RESULT" "by name"
               | other -> failtestf "q2: %A" other
+
+          testCase
+              "a keyed grouping counting an input with no contributor is recorded with the floor that keeps it, round-trips and returns its row (D21)"
+          <| fun _ ->
+              let s, result = operandSession keyedModel keyholder keyedNone
+              let wire = Export.wire s.Records
+              let records, state = SessionWire.read (Some s.Head) wire |> ok "read"
+              Expect.equal (SessionWire.write records) wire "the same bytes"
+              Expect.equal state s.State "the same state"
+
+              match (Session.account state "q1" |> Option.get).Verdict with
+              | Some(Verdict.Admitted(_, _, rules, _, _, _)) ->
+                  Expect.isTrue
+                      (rules
+                       |> List.exists (fun r ->
+                           match r with
+                           | PolicyRule.GroupFloorApplied(_, 2, _) -> true
+                           | _ -> false))
+                      "the floor at two"
+              | other -> failtestf "q1: %A" other
+
+              // the recorded rewrite counts the key and its copy, and keeps a group whose every count is
+              // none or at the floor
+              Expect.stringContains wire "floor_count_2" "a count per input"
+              Expect.stringContains wire "\"op\":\"or\"" "the recorded filter says none or at the floor"
+
+              match result with
+              | Ok t -> Expect.equal (Table.rowCount t) 1 "a count of zero no longer drops the group"
+              | Error e -> failtestf "run: %A" e
 
           testCase "a 0.3.0 reader refuses the keyed tag by name, and an unknown tag is refused here at the same path"
           <| fun _ ->

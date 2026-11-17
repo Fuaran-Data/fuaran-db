@@ -589,6 +589,52 @@ module Staged =
     let admit (holder: Subject) (pipeline: Transform list) : Result<Admitted, PolicyRefusal> =
         Policy.admitWith model holder operands (Ref "order_headers") pipeline
 
+    /// The staged model with its group floor at `floor`.
+    let withFloor (floor: int) : ModelNode =
+        replace
+            "l:shop"
+            (fun n ->
+                match n.Kind with
+                | NodeKind.Limit l ->
+                    { n with
+                        Kind = NodeKind.Limit { l with MinGroupSize = Some floor } }
+                | _ -> n)
+            model
+
+    /// The policy over a pipeline for `holder`, against the staged model with its floor at `floor`.
+    let admitAt (floor: int) (holder: Subject) (pipeline: Transform list) : Result<Admitted, PolicyRefusal> =
+        Policy.admitWith (withFloor floor) holder operands (Ref "order_headers") pipeline
+
+    /// Not a staged shape: a probe of what a kept group answers over an input with no contributor
+    /// (DECISIONS.md D21). Per store, the orders and the shoppers, and every aggregate over a copy of the
+    /// shopper key and of the spend that no row holds: no order has a spend below minus a million.
+    let emptyInputs: Transform list =
+        let never = Binary(Lt, Col "spend", amount "-1000000")
+
+        orderStage
+        @ [ Derive("never_shopper", onlyWhere never (Col "shopper"))
+            Derive("never_spend", onlyWhere never (Col "spend"))
+            GroupBy(
+                [ "store" ],
+                [ agg "orders" Count "order_id"
+                  agg "shoppers" Count "shopper"
+                  agg "never_shoppers" Count "never_shopper"
+                  agg "never_distinct" CountDistinct "never_shopper"
+                  agg "never_count" Count "never_spend"
+                  agg "never_sum" Sum "never_spend"
+                  agg "never_mean" Mean "never_spend"
+                  agg "never_least" Min "never_spend"
+                  agg "never_most" Max "never_spend" ]
+            ) ]
+        @ page [ "store" ]
+
+    /// What an engine leg runs, by name, with the floor each is admitted at: the six shapes at the staged
+    /// model's own floor, and the empty-input probe at a floor of 1 and of 2 (DECISIONS.md D21).
+    let engineRuns: (string * int * Transform list) list =
+        [ for name, pipeline in shapes -> name, 1, pipeline ]
+        @ [ "empty inputs at a floor of 1", 1, emptyInputs
+            "empty inputs at a floor of 2", 2, emptyInputs ]
+
     /// The reference evaluator's answer to an admitted shape: its pipeline and operands as admitted.
     let reference (admitted: Admitted) : Result<Table, EvalError> =
         Fuaran.DB.Provider.PlacementLaws.reference

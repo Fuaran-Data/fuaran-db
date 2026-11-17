@@ -237,9 +237,10 @@ let runAgainstServer (dialect: Dialect) (connectionString: string) : Report * st
         | Ok report -> report, version, collation
         | Error e -> failtestf "the seed could not be placed: %s" e)
 
-/// The staged shapes over the configured server (DECISIONS.md D19, D20): each admitted under the keyed
-/// grant, lowered through the dialect, run by the engine, its suffix finished, and compared with the
-/// reference. Answers each shape's name and whether it agreed, with both answers where it did not.
+/// The staged shapes over the configured server (DECISIONS.md D19, D20, D21), with the empty-input
+/// probe at two floors: each admitted under the keyed grant, lowered through the dialect, run by the
+/// engine, its suffix finished, and compared with the reference. Answers each run's name and whether it
+/// agreed, with both answers where it did not.
 let stagedAgainstServer (connectionString: string) : (string * Result<unit, string>) list =
     withDatabase "fuaran_db_conformance_" connectionString (fun conn ->
         let host = sqlHost conn
@@ -253,9 +254,9 @@ let stagedAgainstServer (connectionString: string) : (string * Result<unit, stri
                     | HostFailure.Failed detail -> detail
                     | HostFailure.Refused e -> sprintf "refused %A" e)
 
-            [ for name, pipeline in Sample.Staged.shapes ->
+            [ for name, floor, pipeline in Sample.Staged.engineRuns ->
                   name,
-                  match Sample.Staged.admit Sample.Staged.subject pipeline with
+                  match Sample.Staged.admitAt floor Sample.Staged.subject pipeline with
                   | Error r -> Error(Policy.describe r)
                   | Ok admitted ->
                       Sample.Staged.placed SqlServer.dialect execute admitted

@@ -12,8 +12,8 @@ open Fuaran.Compute
 //
 //  REWRITING — the pipeline is changed before lowering, by steps a reader can
 //  inspect: a row policy becomes a `Filter` the pipeline cannot remove, and a
-//  grouping over an aggregate-only column gains a count and a `Filter` at the
-//  model's floor.
+//  grouping over an aggregate-only column gains a count and a `Filter` that
+//  drops a group with too few contributors, never one with none (D21).
 //
 //  The subject is a VALUE the host supplies: a principal, its attributes and its
 //  grants, as data. The domain never resolves an identity.
@@ -144,7 +144,7 @@ type PolicyRule =
     /// admitted pipeline (counted from 1): first, for the source; right after the join, for a joined table.
     | RowPolicyApplied of table: string * policy: string * at: int * predicate: ColExpr
     /// The grouping at written step `step` gained a count per aggregate-only column, and a `Filter`
-    /// keeping groups of at least `floor`.
+    /// dropping a group in which some count is between 1 and one fewer than `floor` (DECISIONS.md D21).
     | GroupFloorApplied of step: int * floor: int * columns: ColumnRef list
     /// The cost limits the pipeline was held to, and what it used: the rows its bounding `Limit`
     /// asks for, its joins and its widest grouping.
@@ -1284,7 +1284,12 @@ module Policy =
 
         go stem
 
-    /// A grouping rewritten to keep groups of at least `floor` contributors per aggregate-only column.
+    /// A grouping rewritten to drop a group for too few contributors, not for none (DECISIONS.md D21):
+    /// each counted input has no contributor or at least `floor`, and, above a floor of 1, some input
+    /// has at least `floor`, which shows the group has at least `floor` rows. A count of zero is then a
+    /// fact about that many rows, of the kind a count at the floor already answers; with one input the
+    /// two conditions are one comparison, as they were before D21. At a floor of 1 every group has a row
+    /// to show, and the floor drops nothing.
     let private floored (floor: int) (keys: string list) (aggs: Agg list) (needs: (string * ColumnRef list) list) =
         let taken = keys @ (aggs |> List.map _.Name)
 
@@ -1295,10 +1300,21 @@ module Policy =
                   Fn = Count
                   Of = o })
 
+        let atFloor (c: Agg) = Binary(Ge, Col c.Name, Lit(Int floor))
+
+        let noneOrAtFloor (c: Agg) =
+            Binary(Or, Binary(Eq, Col c.Name, Lit(Int 0)), atFloor c)
+
         let keep =
-            counts
-            |> List.map (fun c -> Binary(Ge, Col c.Name, Lit(Int floor)))
-            |> List.reduce (fun a b -> Binary(And, a, b))
+            match counts with
+            | [ c ] when floor > 1 -> atFloor c
+            | _ ->
+                (counts |> List.map noneOrAtFloor)
+                @ (if floor > 1 then
+                       [ counts |> List.map atFloor |> List.reduce (fun a b -> Binary(Or, a, b)) ]
+                   else
+                       [])
+                |> List.reduce (fun a b -> Binary(And, a, b))
 
         [ GroupBy(keys, aggs @ counts)
           Filter keep

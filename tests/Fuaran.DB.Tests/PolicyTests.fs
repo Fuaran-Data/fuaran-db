@@ -715,6 +715,87 @@ let tests =
                       "groups smaller than the floor are gone"
               | Error e -> failtestf "%A" e
 
+          testCase "the floor drops a group for too few contributors to an input, never for none (D21)"
+          <| fun _ ->
+              // north staff: eng 1,4,5,8,13 (5), ops 2,10,14 (3), sales 7 (1), legal 11 (1)
+              let after (n: int) = Binary(Gt, Col "staff_id", Lit(Int n))
+
+              let counting (withAll: bool) (copies: (string * ColExpr) list) =
+                  [ for name, c in copies -> Derive(name, Case([ c, Col "salary" ], Lit Null)) ]
+                  @ [ GroupBy(
+                          [ "dept" ],
+                          (if withAll then [ agg "all" Count "salary" ] else [])
+                          @ [ for name, _ in copies -> agg name Mean name ]
+                      )
+                      page 50 ]
+
+              let kept (m: ModelNode) (pipeline: Transform list) =
+                  match Policy.admit m analyst (Ref "staff") pipeline with
+                  | Error r -> failtestf "refused: %s" (Policy.describe r)
+                  | Ok a ->
+                      match eval tables (Ref "staff") a.Pipeline with
+                      | Ok t -> t.Columns |> List.head |> Sample.cells |> List.sort
+                      | Error e -> failtestf "%A" e
+
+              let none = counting true [ "none", after 20 ]
+              let late = counting true [ "late", after 9 ]
+              let allNone = counting false [ "none", after 20; "never", after 30 ]
+
+              // at a floor of 3
+              Expect.equal
+                  (kept model none)
+                  [ Str "eng"; Str "ops" ]
+                  "none to one input and at least three to another: kept; one to every input: dropped"
+
+              Expect.equal (kept model late) [] "one or two contributors to any input drop the group"
+
+              Expect.equal
+                  (kept model allNone)
+                  []
+                  "no input with the floor's contributors: nothing shows the group has three rows, so it is dropped"
+
+              match Policy.admit model analyst (Ref "staff") none with
+              | Error r -> failtestf "refused: %s" (Policy.describe r)
+              | Ok a ->
+                  let count (n: int) = Col(sprintf "floor_count_%d" n)
+                  let atFloor n = Binary(Ge, count n, Lit(Int 3))
+
+                  let noneOrAtFloor n =
+                      Binary(Or, Binary(Eq, count n, Lit(Int 0)), atFloor n)
+
+                  Expect.contains
+                      a.Pipeline
+                      (Filter(
+                          Binary(And, Binary(And, noneOrAtFloor 1, noneOrAtFloor 2), Binary(Or, atFloor 1, atFloor 2))
+                      ))
+                      "each count is none or at the floor, and some count is at the floor"
+
+              // at a floor of 1 the floor drops nothing
+              let atOne = modelWith [ { fullLimit with MinGroupSize = Some 1 } ]
+              let everyDept = [ Str "eng"; Str "legal"; Str "ops"; Str "sales" ]
+
+              for name, pipeline in [ "none", none; "late", late; "all none", allNone ] do
+                  Expect.equal (kept atOne pipeline) everyDept (name + ": every group at a floor of 1")
+
+              // A zero over fewer rows than the floor is about them (D21.2): one row per group, counting a copy
+              // of a keyed department chosen by its own value. Kept, a zero would say the row's department is
+              // not legal; at a floor of 3 every such group is dropped.
+              let byValue =
+                  [ Derive("legal_dept", Case([ Binary(Eq, Col "dept", str "legal"), Col "dept" ], Lit Null))
+                    GroupBy([ "staff_id" ], [ agg "legal" Count "legal_dept" ])
+                    page 50 ]
+
+              let groups (m: ModelNode) =
+                  match Policy.admit m keyholder (Ref "staff") byValue with
+                  | Error r -> failtestf "refused: %s" (Policy.describe r)
+                  | Ok a ->
+                      match eval tables (Ref "staff") a.Pipeline with
+                      | Ok t -> Table.rowCount t
+                      | Error e -> failtestf "%A" e
+
+              Expect.equal (groups model) 0 "a one-row group is dropped for its zero at a floor of 3"
+              Expect.equal (groups atOne) 10 "at a floor of 1 each north row is its own group"
+
           testCase "without a declared floor, an aggregate over an aggregate-only column is refused"
           <| fun _ ->
               let m = modelWith [ { fullLimit with MinGroupSize = None } ]

@@ -754,8 +754,7 @@ let tests =
 
                                   Expect.isEmpty local (name + ": an empty local suffix")
 
-          testCase
-              "under the keyed grant each staged shape answers what the row-level grant answers, but the shoppers roll-up, which the group floor empties"
+          testCase "under the keyed grant each staged shape answers exactly what the row-level grant answers (D21)"
           <| fun _ ->
               let answer (holder: Subject) (pipeline: Transform list) =
                   match Sample.Staged.admit holder pipeline with
@@ -768,8 +767,8 @@ let tests =
 
                   if name = "shoppers" then
                       // Its grouping counts four keyed columns, three of them chosen by a condition, and
-                      // the floor keeps a group only when each has a member (D18.5): no group here has
-                      // both a new and a returning shopper. The floor stands as written (D20.6).
+                      // a group with no new shopper, or none returning, has a count of zero for that copy.
+                      // The floor still counts the customer key; a zero no longer drops the group (D21).
                       let last =
                           admitted.Applied
                           |> List.choose (function
@@ -782,11 +781,66 @@ let tests =
                           [ "order_headers", "customer_key" ]
                           "the floor counts the customer key"
 
-                      Expect.isFalse (Fuaran.DB.Conformance.Kit.agrees true keyed rows) "the floor changes its answer"
-                  else
-                      Expect.isTrue
-                          (Fuaran.DB.Conformance.Kit.agrees true keyed rows)
-                          (sprintf "%s: %A against %A" name keyed rows)
+                  match keyed with
+                  | Ok t -> Expect.isGreaterThan (Table.rowCount t) 0 (name + ": the keyed grant answers rows")
+                  | Error e -> failtestf "%s: the reference refused: %A" name e
+
+                  Expect.isTrue
+                      (Fuaran.DB.Conformance.Kit.agrees true keyed rows)
+                      (sprintf "%s: %A against %A" name keyed rows)
+
+          testCase
+              "a kept group's aggregates over an input with no contributor, in the reference and every dialect (D21)"
+          <| fun _ ->
+              let execute (s: Statement) =
+                  ReferenceDialect.execute s Sample.Staged.physical
+                  |> Result.mapError (sprintf "%A")
+
+              for floor in [ 1; 2 ] do
+                  let admitted =
+                      match Sample.Staged.admitAt floor Sample.Staged.subject Sample.Staged.emptyInputs with
+                      | Ok a -> a
+                      | Error r -> failtestf "floor %d: %s" floor (Policy.describe r)
+
+                  let expected =
+                      match Sample.Staged.reference admitted with
+                      | Ok t -> t
+                      | Error e -> failtestf "floor %d: the reference refused: %A" floor e
+
+                  Expect.isGreaterThan (Table.rowCount expected) 0 (sprintf "floor %d: groups are kept" floor)
+
+                  let cellsOf (name: string) =
+                      expected.Columns
+                      |> List.zip (expected.Schema |> List.map _.Name)
+                      |> List.find (fun (n, _) -> n = name)
+                      |> snd
+                      |> Sample.cells
+
+                  // a count over no contributor is zero; a sum, a mean and a pick over nothing are null
+                  for name, answer in
+                      [ "never_shoppers", Int 0
+                        "never_distinct", Int 0
+                        "never_count", Int 0
+                        "never_sum", Null
+                        "never_mean", Null
+                        "never_least", Null
+                        "never_most", Null ] do
+                      for cell in cellsOf name do
+                          Expect.equal cell answer (sprintf "floor %d: %s over no contributor" floor name)
+
+                  // above a floor of 1, a kept group has at least the floor's contributors to some input
+                  for orders in cellsOf "orders" do
+                      match orders with
+                      | Int n -> Expect.isGreaterThanOrEqual n floor (sprintf "floor %d: a kept group" floor)
+                      | other -> failtestf "floor %d: a count answered %A" floor other
+
+                  for dialect in [ d; SqlServer.dialect; PostgreSql.dialect ] do
+                      match Sample.Staged.placed dialect execute admitted with
+                      | Error why -> failtestf "floor %d through %s: %s" floor dialect.Name why
+                      | Ok(_, answer) ->
+                          Expect.isTrue
+                              (Fuaran.DB.Conformance.Kit.agrees true answer (Ok expected))
+                              (sprintf "floor %d through %s: %A against %A" floor dialect.Name answer expected)
 
           testCase "the staged shapes' placements equal the reference evaluator in every dialect"
           <| fun _ ->
@@ -802,8 +856,6 @@ let tests =
                           let expected = Sample.Staged.reference admitted
 
                           match expected with
-                          | Ok t when name = "shoppers" ->
-                              Expect.equal (Table.rowCount t) 0 "the floor empties it (D20.6)"
                           | Ok t -> Expect.isGreaterThan (Table.rowCount t) 0 (name + ": the reference answers rows")
                           | Error e -> failtestf "%s: the reference refused: %A" name e
 
