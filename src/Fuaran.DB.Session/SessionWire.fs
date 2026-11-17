@@ -70,11 +70,6 @@ module SessionWire =
               "column", JStr c.Column
               "classification", JStr c.Classification ]
 
-    let private levelTag (l: GrantLevel) =
-        match l with
-        | GrantLevel.Aggregate -> "aggregate"
-        | GrantLevel.RowLevel -> "row"
-
     let private optional (name: string) (v: JVal option) =
         v |> Option.map (fun j -> name, j) |> Option.toList
 
@@ -94,7 +89,7 @@ module SessionWire =
                 [ "columns",
                   JArr(
                       cols
-                      |> List.map (fun (c, l) -> JObj [ "column", columnRefJson c; "level", JStr(levelTag l) ])
+                      |> List.map (fun (c, l) -> JObj [ "column", columnRefJson c; "level", JStr(Policy.levelTag l) ])
                   ) ]
         | PolicyRule.RowPolicyApplied(table, policy, at, predicate) ->
             Canonical.typed
@@ -493,11 +488,9 @@ module SessionWire =
                             let! col = columnRefOf (p + ".column") colJson
                             let! level = str p "level" cfs
 
-                            match level with
-                            | "aggregate" -> return col, GrantLevel.Aggregate
-                            | "row" -> return col, GrantLevel.RowLevel
-                            | other ->
-                                return! Error(WireError.UnknownKind(p + ".level", other, [ "aggregate"; "row" ]))
+                            match Policy.tryLevel level with
+                            | Some l -> return col, l
+                            | None -> return! Error(WireError.UnknownKind(p + ".level", level, Policy.levelTags))
                         })
 
                 return PolicyRule.ColumnsGranted granted

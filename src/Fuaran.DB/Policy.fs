@@ -30,6 +30,11 @@ type GrantLevel =
     /// A column of the classification may be read only as the input of an aggregate, in groups no
     /// smaller than the model's floor; never row by row.
     | Aggregate
+    /// A column of the classification may be read as `Aggregate` reads it, and may also key a grouping
+    /// or a join, in the pipeline and in a grouped operand; its value never reaches the result, under
+    /// any name or derivation, and neither does a row at its grain (DECISIONS.md D18). The answer of a
+    /// `Min`, `Max` or `Median` over it is one of its values, so it is held as a key too.
+    | Keyed
     /// A column of the classification may be read row by row.
     | RowLevel
 
@@ -100,6 +105,14 @@ type PolicyRefusal =
     | ColumnNotGranted of site: PolicySite * column: ColumnRef * granted: string list
     /// A column the subject may read only in aggregate is used row by row; `usage` names how.
     | AggregateOnly of site: PolicySite * column: ColumnRef * usage: string
+    /// A column the subject may read only as a key or in aggregate is used otherwise; `usage` names how.
+    | KeyOnly of site: PolicySite * column: ColumnRef * usage: string
+    /// A result column carries the value of a column the subject may read only as a key or in
+    /// aggregate, under whatever name and through whatever derivation.
+    | KeyInResult of resultColumn: string * column: ColumnRef
+    /// The result is still one row per value of a column the subject may read only as a key or in
+    /// aggregate: a grouping or join keyed on it is not followed by a grouping that is not.
+    | KeyGrain of column: ColumnRef
     /// An aggregate over an aggregate-only column, and no limit declares a group floor.
     | FloorUndeclared of step: int * column: ColumnRef
     /// A row policy names a subject attribute the subject does not carry. `held` names those it does.
@@ -185,6 +198,9 @@ module Policy =
         | PolicyRefusal.Pipeline _ -> "DB-PIPELINE"
         | PolicyRefusal.ColumnNotGranted _ -> "DB-GRANT-COLUMN"
         | PolicyRefusal.AggregateOnly _ -> "DB-GRANT-AGGREGATE-ONLY"
+        | PolicyRefusal.KeyOnly _ -> "DB-GRANT-KEY-ONLY"
+        | PolicyRefusal.KeyInResult _ -> "DB-GRANT-KEY-IN-RESULT"
+        | PolicyRefusal.KeyGrain _ -> "DB-GRANT-KEY-GRAIN"
         | PolicyRefusal.FloorUndeclared _ -> "DB-GROUP-FLOOR-UNDECLARED"
         | PolicyRefusal.AttributeMissing _ -> "DB-ROW-POLICY-ATTRIBUTE"
         | PolicyRefusal.PolicyUnwrappable _ -> "DB-ROW-POLICY-UNWRAPPABLE"
@@ -202,6 +218,9 @@ module Policy =
           "DB-PIPELINE"
           "DB-GRANT-COLUMN"
           "DB-GRANT-AGGREGATE-ONLY"
+          "DB-GRANT-KEY-ONLY"
+          "DB-GRANT-KEY-IN-RESULT"
+          "DB-GRANT-KEY-GRAIN"
           "DB-GROUP-FLOOR-UNDECLARED"
           "DB-ROW-POLICY-ATTRIBUTE"
           "DB-ROW-POLICY-UNWRAPPABLE"
@@ -224,6 +243,21 @@ module Policy =
 
     /// Every applied-rule kind.
     let ruleTags = [ "columns granted"; "row policy"; "group floor"; "cost admitted" ]
+
+    /// A grant level's wire tag, which every codec that carries a level writes.
+    let levelTag (l: GrantLevel) : string =
+        match l with
+        | GrantLevel.Aggregate -> "aggregate"
+        | GrantLevel.Keyed -> "keyed"
+        | GrantLevel.RowLevel -> "row"
+
+    /// Every level's wire tag, narrowest first.
+    let levelTags = [ "aggregate"; "keyed"; "row" ]
+
+    /// The level a wire tag names, or `None` for a tag this version does not know.
+    let tryLevel (tag: string) : GrantLevel option =
+        [ GrantLevel.Aggregate; GrantLevel.Keyed; GrantLevel.RowLevel ]
+        |> List.tryFind (fun l -> levelTag l = tag)
 
     let private site (s: PolicySite) =
         match s with
@@ -248,6 +282,9 @@ module Policy =
         | PolicyRefusal.NoGrants _
         | PolicyRefusal.ColumnNotGranted _
         | PolicyRefusal.AggregateOnly _
+        | PolicyRefusal.KeyOnly _
+        | PolicyRefusal.KeyInResult _
+        | PolicyRefusal.KeyGrain _
         | PolicyRefusal.FloorUndeclared _ -> "the subject's grants"
         | PolicyRefusal.AttributeMissing(_, _, a, _) -> sprintf "the subject attribute '%s'" a
         | PolicyRefusal.Pipeline _
@@ -269,6 +306,18 @@ module Policy =
             sprintf "a grant over '%s', or a pipeline that does not read the column" c.Classification
         | PolicyRefusal.AggregateOnly(_, c, _) ->
             sprintf "a row-level grant over '%s', or reading the column only as an aggregate's input" c.Classification
+        | PolicyRefusal.KeyOnly(_, c, _) ->
+            sprintf
+                "a row-level grant over '%s', or using the column only as a grouping key, a join key or an aggregate's input"
+                c.Classification
+        | PolicyRefusal.KeyInResult(_, c) ->
+            sprintf
+                "a result without the column's value: project it away, or fold it into a count, before the result (or a row-level grant over '%s')"
+                c.Classification
+        | PolicyRefusal.KeyGrain c ->
+            sprintf
+                "a grouping not keyed on the column after the last grouping or join keyed on it (or a row-level grant over '%s')"
+                c.Classification
         | PolicyRefusal.FloorUndeclared _ -> "a limit declaring minGroupSize, or a row-level grant"
         | PolicyRefusal.AttributeMissing(_, _, a, _) -> sprintf "a subject carrying the attribute '%s'" a
         | PolicyRefusal.PolicyUnwrappable _ ->
@@ -291,6 +340,17 @@ module Policy =
             sprintf "%s reads %s; the subject is granted: %s" (site s) (col c) (listed granted)
         | PolicyRefusal.AggregateOnly(s, c, usage) ->
             sprintf "%s uses %s as %s; the subject may read it only in aggregate" (site s) (col c) usage
+        | PolicyRefusal.KeyOnly(s, c, usage) ->
+            sprintf "%s uses %s as %s; the subject may read it only as a key or in aggregate" (site s) (col c) usage
+        | PolicyRefusal.KeyInResult(name, c) ->
+            sprintf
+                "result column '%s' carries the value of %s; the subject may read it only as a key or in aggregate"
+                name
+                (col c)
+        | PolicyRefusal.KeyGrain c ->
+            sprintf
+                "the result is still one row per value of %s: a grouping or join keyed on it is not followed by a grouping that is not"
+                (col c)
         | PolicyRefusal.FloorUndeclared(s, c) ->
             sprintf "step %d aggregates %s, readable only in aggregate, and no limit declares a group floor" s (col c)
         | PolicyRefusal.AttributeMissing(t, p, a, held) ->
@@ -321,21 +381,42 @@ module Policy =
     // ---- column lineage: which model columns a name at a step carries ----
 
     /// The model columns a name carries: as row values (`Raw`), and folded into an aggregate (`Agg`).
+    /// `Picked` is the part of `Agg` folded into an aggregate whose answer is one of the group's values
+    /// (`Min`, `Max`, `Median`): under a keyed grant that answer is a key (D18), under any other it
+    /// is an aggregate.
     type private Lin =
         { Raw: Set<ColumnRef>
-          Agg: Set<ColumnRef> }
+          Agg: Set<ColumnRef>
+          Picked: Set<ColumnRef> }
 
-    let private noLin = { Raw = Set.empty; Agg = Set.empty }
+    let private noLin =
+        { Raw = Set.empty
+          Agg = Set.empty
+          Picked = Set.empty }
+
+    let private rawLin (c: ColumnRef) = { noLin with Raw = Set.singleton c }
 
     let private join (a: Lin) (b: Lin) =
         { Raw = a.Raw + b.Raw
-          Agg = a.Agg + b.Agg }
+          Agg = a.Agg + b.Agg
+          Picked = a.Picked + b.Picked }
+
+    /// What a name carries that a keyed grant holds as a key's value: its row values and its picks.
+    let private asKey (l: Lin) = l.Raw + l.Picked
 
     /// The names flowing at a step, each with its lineage. `Rest` is the lineage of names a walk
-    /// cannot list (after a pivot).
+    /// cannot list (after a pivot). `Keys` is the model columns the rows are grouped or joined on
+    /// since the last grouping that is not keyed on them: the grain a keyed grant keeps out of the
+    /// result (D18).
     type private Flow =
         { Cols: (string * Lin) list
-          Rest: Lin option }
+          Rest: Lin option
+          Keys: Set<ColumnRef> }
+
+    let private noFlow =
+        { Cols = []
+          Rest = None
+          Keys = Set.empty }
 
     let private linOf (flow: Flow) (name: string) : Lin =
         match flow.Cols |> List.tryFind (fun (n, _) -> n = name) with
@@ -357,12 +438,10 @@ module Policy =
     /// The lineage of the columns a projection withholds from `table`: one column no grant can name,
     /// classified `mark`, which the projection's own grants never hold (Phase 1907).
     let private withheldLin (mark: string) (table: string) : Lin =
-        { Raw =
-            Set.singleton
-                { Table = table
-                  Column = ""
-                  Classification = mark }
-          Agg = Set.empty }
+        rawLin
+            { Table = table
+              Column = ""
+              Classification = mark }
 
     /// A table's columns as a read of it starts. Under a projection (`mark`), the table may hold columns
     /// the projection withholds, so a read of it carries them as the walk's `Rest`: a use of every
@@ -372,13 +451,12 @@ module Policy =
             Model.columns node
             |> List.map (fun (_, c) ->
                 c.Name,
-                { Raw =
-                    Set.singleton
-                        { Table = spec.Name
-                          Column = c.Name
-                          Classification = c.Classification }
-                  Agg = Set.empty })
-          Rest = mark |> Option.map (fun m -> withheldLin m spec.Name) }
+                rawLin
+                    { Table = spec.Name
+                      Column = c.Name
+                      Classification = c.Classification })
+          Rest = mark |> Option.map (fun m -> withheldLin m spec.Name)
+          Keys = Set.empty }
 
     let private operandFlow
         (mark: string option)
@@ -392,8 +470,8 @@ module Policy =
             match Map.tryFind name ops, Model.tryTable name model with
             | Some flow, _ -> flow
             | None, Some(node, spec) -> tableFlow mark node spec
-            | None, None -> { Cols = []; Rest = None }
-        | Embedded _ -> { Cols = []; Rest = None }
+            | None, None -> noFlow
+        | Embedded _ -> noFlow
 
     /// A right column's name after a join: the evaluator suffixes one that collides with a left name.
     let private rightName (leftNames: string list) (c: string) =
@@ -424,10 +502,12 @@ module Policy =
             let other = operandFlow mark model ops source
 
             { flow with
-                Cols = flow.Cols |> List.map (fun (n, l) -> n, join l (linOf other n)) }
+                Cols = flow.Cols |> List.map (fun (n, l) -> n, join l (linOf other n))
+                Keys = flow.Keys + other.Keys }
         | Project pairs ->
-            { Cols = pairs |> List.map (fun (src, out) -> out, linOf flow src)
-              Rest = None }
+            { flow with
+                Cols = pairs |> List.map (fun (src, out) -> out, linOf flow src)
+                Rest = None }
         | Derive(name, e) ->
             { flow with
                 Cols = upsert name (linOfAll flow (Reads.ofExpr e)) flow.Cols }
@@ -437,18 +517,43 @@ module Policy =
                 @ (aggs
                    |> List.map (fun a ->
                        let l = linOf flow a.Of
-                       a.Name, { Raw = Set.empty; Agg = l.Raw + l.Agg }))
-              Rest = None }
-        | Join(source, _, how) ->
+
+                       let picked =
+                           match a.Fn with
+                           | Min
+                           | Max
+                           | Median -> asKey l
+                           | Sum
+                           | Mean
+                           | Count
+                           | StdDev
+                           | CountDistinct
+                           | First
+                           | Last -> Set.empty
+
+                       a.Name,
+                       { Raw = Set.empty
+                         Agg = l.Raw + l.Agg
+                         Picked = picked }))
+              Rest = None
+              // A grouping sets the grain: the rows are now one per value of its keys.
+              Keys = keys |> List.map (linOf flow >> asKey) |> Set.unionMany }
+        | Join(source, on, how) ->
+            let other = operandFlow mark model ops source
+
+            let keyed =
+                (on |> List.map (fst >> linOf flow >> asKey))
+                @ (on |> List.map (snd >> linOf other >> asKey))
+                |> Set.unionMany
+
             match how with
             | Semi
-            | Anti -> flow
+            | Anti -> { flow with Keys = flow.Keys + keyed }
             | Inner
             | Left
             | Right
             | Outer ->
                 let leftNames = flow.Cols |> List.map fst
-                let other = operandFlow mark model ops source
 
                 // Under a projection the withheld columns take part in the evaluator's renaming too,
                 // so a right column's name may, over the full table, name a withheld column instead:
@@ -468,7 +573,8 @@ module Policy =
                        |> List.map (fun (n, l) ->
                            let named = rightName leftNames n
                            named, taint named l))
-                  Rest = joinRest flow.Rest other.Rest }
+                  Rest = joinRest flow.Rest other.Rest
+                  Keys = flow.Keys + other.Keys + keyed }
         | Window spec ->
             { flow with
                 Cols =
@@ -478,12 +584,14 @@ module Policy =
                         flow.Cols }
         | Pivot spec ->
             { Cols = spec.Index |> List.map (fun k -> k, linOf flow k)
-              Rest = Some(linOfAll flow [ spec.On; spec.Values ]) }
+              Rest = Some(linOfAll flow [ spec.On; spec.Values ])
+              Keys = spec.Index |> List.map (linOf flow >> asKey) |> Set.unionMany }
         | Unpivot(idVars, valueVars) ->
-            { Cols =
-                (idVars |> List.map (fun k -> k, linOf flow k))
-                @ [ "variable", noLin; "value", linOfAll flow valueVars ]
-              Rest = None }
+            { flow with
+                Cols =
+                    (idVars |> List.map (fun k -> k, linOf flow k))
+                    @ [ "variable", noLin; "value", linOfAll flow valueVars ]
+                Rest = None }
         // A definition changes no frame.
         | Define _ -> flow
         // A fit's every statistic is computed from every column it reads, and a categorical term's
@@ -492,12 +600,14 @@ module Policy =
         | Fit spec ->
             let read = linOfAll flow (Reads.ofStep step |> Result.defaultValue [])
             let keys = spec.GroupBy |> List.map (fun k -> k, linOf flow k)
+            let grain = keys |> List.map (snd >> asKey) |> Set.unionMany
             let stats (names: string list) = names |> List.map (fun n -> n, read)
 
             match spec.Output with
             | FitOutput.Coefficients ->
                 { Cols = keys @ stats [ "term"; "estimate"; "std_error"; "t" ] @ [ "unit", noLin ]
-                  Rest = None }
+                  Rest = None
+                  Keys = grain }
             | FitOutput.Summary ->
                 let theta =
                     match spec.Family with
@@ -519,7 +629,8 @@ module Policy =
                           "converged" ]
                         @ theta
                     )
-                  Rest = None }
+                  Rest = None
+                  Keys = grain }
             | FitOutput.Fitted ->
                 { flow with
                     Cols = upsert "fitted" read flow.Cols }
@@ -554,11 +665,13 @@ module Policy =
 
     // ---- how a step uses what it reads ----
 
-    /// How a read is used: carried into another column, folded into an aggregate, or used row by
-    /// row (named, for the refusal).
+    /// How a read is used: carried into another column, folded into an aggregate, keying a grouping
+    /// or a join, returned as a named result column, or used row by row (named, for the refusal).
     type private Use =
         | Carry
         | AggInput
+        | Key of string
+        | Returned of string
         | Expose of string
 
     let private uses
@@ -576,7 +689,7 @@ module Policy =
         | Project pairs -> names Carry (pairs |> List.map fst)
         | Derive(_, e) -> names Carry (Reads.ofExpr e)
         | GroupBy(keys, aggs) ->
-            names (Expose "a grouping key") keys
+            names (Key "a grouping key") keys
             @ (aggs
                |> List.map (fun a ->
                    linOf flow a.Of,
@@ -594,8 +707,8 @@ module Policy =
         | Join(source, on, _) ->
             let other = operandFlow mark model ops source
 
-            names (Expose "a join key") (on |> List.map fst)
-            @ (on |> List.map (fun (_, r) -> linOf other r, Expose "a join key"))
+            names (Key "a join key") (on |> List.map fst)
+            @ (on |> List.map (fun (_, r) -> linOf other r, Key "a join key"))
         | Window spec ->
             names (Expose "a window's input") (spec.PartitionBy @ (spec.OrderBy |> List.map fst) @ [ spec.Of ])
         | Pivot spec -> names (Expose "a pivot's input") (spec.Index @ [ spec.On; spec.Values ])
@@ -630,20 +743,18 @@ module Policy =
             @ (Reads.ofPredictModel spec
                |> List.map (fun c -> linOf other c, Expose "a prediction's model"))
 
-    /// How far `grants` reach a classification: row by row when any grant over it says so, in aggregate
-    /// when one does and none says more, and not at all when none names it.
+    /// How far `grants` reach a classification: row by row when any grant over it says so; as a key when
+    /// one does and none says more; in aggregate when one does and none says more; and not at all when
+    /// none names it. A keyed grant governs an aggregate grant over the same classification (D18): it
+    /// is the statement that the value never leaves, so holding both reads the classification keyed.
     let level (grants: Grant list) (classification: string) : GrantLevel option =
         let levels =
             grants
             |> List.filter (fun g -> g.Classification = classification)
             |> List.map _.Level
 
-        if List.contains GrantLevel.RowLevel levels then
-            Some GrantLevel.RowLevel
-        elif List.isEmpty levels then
-            None
-        else
-            Some GrantLevel.Aggregate
+        [ GrantLevel.RowLevel; GrantLevel.Keyed; GrantLevel.Aggregate ]
+        |> List.tryFind (fun l -> List.contains l levels)
 
     /// Check one use against the grants; `Ok` carries every column it admitted, with its level.
     let private checkUse
@@ -662,16 +773,32 @@ module Policy =
                     | None -> Error(PolicyRefusal.ColumnNotGranted(at, c, granted))
                     | Some GrantLevel.Aggregate when lin.Raw.Contains c ->
                         match how with
-                        | Expose usage -> Error(PolicyRefusal.AggregateOnly(at, c, usage))
+                        | Expose usage
+                        | Key usage -> Error(PolicyRefusal.AggregateOnly(at, c, usage))
+                        | Returned _ -> Error(PolicyRefusal.AggregateOnly(at, c, "a result column"))
                         | Carry
                         | AggInput -> Ok(seen @ [ c, GrantLevel.Aggregate ])
+                    | Some GrantLevel.Keyed when (asKey lin).Contains c ->
+                        match how with
+                        | Expose usage -> Error(PolicyRefusal.KeyOnly(at, c, usage))
+                        | Returned name -> Error(PolicyRefusal.KeyInResult(name, c))
+                        | Key _
+                        | Carry
+                        | AggInput -> Ok(seen @ [ c, GrantLevel.Keyed ])
                     | Some level -> Ok(seen @ [ c, level ])))
             (Ok [])
 
+    /// The columns `lin` carries that a grouping over it must floor: the row values of an aggregate-only
+    /// column, and a keyed column's values and picks (ruling 5 holds for both levels, D18).
     let private aggregateOnly (subject: Subject) (lin: Lin) : ColumnRef list =
-        lin.Raw
+        asKey lin
         |> Set.toList
-        |> List.filter (fun c -> level subject.Grants c.Classification = Some GrantLevel.Aggregate)
+        |> List.filter (fun c ->
+            match level subject.Grants c.Classification with
+            | Some GrantLevel.Aggregate -> lin.Raw.Contains c
+            | Some GrantLevel.Keyed -> true
+            | Some GrantLevel.RowLevel
+            | None -> false)
 
     /// The written pipeline walked against the grants, step by step: the lineage flowing out of its last
     /// step, every column it admitted, and, per grouping step that aggregates an aggregate-only column,
@@ -755,15 +882,23 @@ module Policy =
         =
         walkGrants mark model ops subject start pipeline
         |> Result.bind (fun (flow, admitted, floors) ->
-            everything flow
+            // the names a walk cannot list are reported under one name: every column of the rows
+            (flow.Cols @ (flow.Rest |> Option.map (fun l -> "*", l) |> Option.toList))
             |> List.fold
-                (fun acc l ->
+                (fun acc (name, l) ->
                     acc
                     |> Result.bind (fun seen ->
-                        checkUse subject PolicySite.Result (l, Expose "a result column")
-                        |> Result.map ((@) seen)))
+                        checkUse subject PolicySite.Result (l, Returned name) |> Result.map ((@) seen)))
                 (Ok admitted)
-            |> Result.map (fun admitted -> List.distinct admitted, floors))
+            |> Result.bind (fun admitted ->
+                // a keyed column keeps its grain out of the result as well as its value (D18)
+                match
+                    flow.Keys
+                    |> Set.toList
+                    |> List.tryFind (fun c -> level subject.Grants c.Classification = Some GrantLevel.Keyed)
+                with
+                | Some c -> Error(PolicyRefusal.KeyGrain c)
+                | None -> Ok(List.distinct admitted, floors)))
 
     // ---- cost limits ----
 
@@ -1098,6 +1233,7 @@ module Policy =
             PolicyRefusal.ColumnNotGranted(PolicySite.Step j, c, granted)
         | PolicyRefusal.AggregateOnly(PolicySite.Step _, c, usage) ->
             PolicyRefusal.AggregateOnly(PolicySite.Step j, c, usage)
+        | PolicyRefusal.KeyOnly(PolicySite.Step _, c, usage) -> PolicyRefusal.KeyOnly(PolicySite.Step j, c, usage)
         | other -> other
 
     /// A grouped operand the pipeline joins, walked against the grants.

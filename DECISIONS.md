@@ -1,5 +1,93 @@
 # Fuaran.DB — decisions (newest first)
 
+## 2026-11-17 — D18: a keyed grant, under which a classified column keys a grouping or a join and never reaches the result (Phase 40)
+
+A grant had two levels. Under `Aggregate` a grouping key and a join key are row-wise uses and are refused (D5.4), and
+under `RowLevel` a statement returning the column is admitted. A consumer's cubes join their tables on a
+pseudonymous key and group on one before aggregating to the grain they return, and the consumer's rule is that such
+a key may be used inside the database and never leave it. Neither level states that rule: the first refuses every
+cube, the second admits a statement returning the keys. This decision adds the level between them. Nine rulings.
+
+1. **The level is `GrantLevel.Keyed`, between `Aggregate` and `RowLevel`.** The name says what the column is for
+   in a pipeline: it keys. `KeyOnly` was considered and declined, because the level also admits everything
+   `Aggregate` admits as an aggregate's input, and a name saying "only" would be false; `JoinKey` was declined as
+   naming one of the two uses. The refusal that names a use outside the level is still called `KeyOnly`
+   (`DB-GRANT-KEY-ONLY`), since there the word describes the subject's limit, as `AggregateOnly` does.
+
+2. **What it admits, and what it refuses, by lineage (D5.3).** A column held at `Keyed` may be carried by a
+   `Project` or `Derive`, folded into a grouping aggregate other than `First` and `Last`, and used as a grouping key
+   or a join key on either side, in the pipeline and in a grouped operand (D16). Every other use of its value is
+   refused as `KeyOnly`, naming the step, the model column and the use: a predicate, a sort key, a window or pivot
+   input, a row compared whole, a model fit's or a prediction's input, `First` and `Last`. A result column that
+   carries its value, under any name and through any derivation, is refused as `KeyInResult`
+   (`DB-GRANT-KEY-IN-RESULT`), naming the result column and the model column. Lineage is the walk D5.3 already
+   makes, so a rename, a `Derive`, a join's `_right` suffix and an operand's output do not get the value out.
+
+3. **A result still at the key's grain is refused.** The walk now tracks the model columns the rows are grouped
+   or joined on: a grouping sets them to its keys (a `Pivot` index and a fit's group keys likewise), and a join of
+   any kind, semi and anti included, adds the keys it reads on both sides and, for a join that keeps the
+   operand's rows, the operand's own. When the result is reached and any of them is held at `Keyed`, the pipeline
+   is refused as `KeyGrain` (`DB-GRANT-KEY-GRAIN`), naming the column. So every grouping or join keyed on such a
+   column must be followed, before the result, by a grouping that is not. The argument for refusing, the
+   default the phase put to the test: a row per key with the key withheld still says, row by row, what is true
+   of one customer or one order, which is what the consumer's rule keeps in. Its answers become identifying by
+   combination (a row whose other columns are rare names its key as surely as the key would), and the policy
+   cannot know which combinations are rare; and a host that wants the key's grain wants a row-level grant,
+   which says so. Admitting it would make `Keyed` a renaming of `RowLevel` with one column dropped. A semi or
+   anti join keyed on the column is refused on the same terms: it is a membership test on the key, and its rows
+   are at the left table's grain, which the key decided. What the walk cannot see: a grouping keyed on another
+   column that is functionally one row per key (a name, say) is not the key's grain to this check; the grant
+   over that column decides what it may reveal. *Reopen if* a consumer needs a key's grain inside a result that
+   is then reduced outside the database, with an argument the check can verify.
+
+4. **A key's `Min`, `Max` or `Median` is a key.** Each answers one of the group's values (a `Median` of an
+   odd-sized group exactly, of an even-sized one the mean of two), so over a keyed column the answer is held as
+   the key itself: the walk records it as a pick of the column, and under `Keyed` a pick is the column's value. It
+   may key a later grouping or join, and may be counted or folded into another aggregate (counted distinct, for
+   instance); it may not reach the result (`KeyInResult`), be filtered on or sorted by (`KeyOnly`). Under
+   `Aggregate` and `RowLevel` a pick is an aggregate, as before, so D5.5's record that `Min` and `Max` over a group
+   at the floor answer one row's value is unchanged for those levels. The other aggregates (`Count`,
+   `CountDistinct`, `Sum`, `Mean`, `StdDev`) answer no member of the group, and their answers leave, floored, as
+   under `Aggregate`. Refusing `Min` and `Max` outright was the stricter alternative; holding the answer as a key
+   keeps the value in as surely, and keeps what a key's pick is good for inside the statement.
+
+5. **The group floor is unchanged (D5.5).** A grouping that aggregates a column held at `Keyed`, or a pick of one,
+   takes the floor rewrite exactly as one over an `Aggregate` column does: a `Count` per such input, a `Filter` at
+   the model's floor, a `Project` back. An undeclared floor is still refused (`DB-GROUP-FLOOR-UNDECLARED`). A
+   grouping keyed on the column and aggregating only row-level columns needs no floor, as before; the grain
+   ruling, not the floor, keeps its rows out of the result.
+
+6. **The levels are not a chain, and a keyed grant governs an aggregate one.** Ruling 4 makes `Keyed` refuse a
+   result `Aggregate` admits (a key's `Min`), and `Keyed` admits keys `Aggregate` refuses, so neither covers the
+   other; `RowLevel` covers both. `Policy.level` over grants holding one classification at both `Aggregate` and
+   `Keyed` answers `Keyed`: the keyed grant is the statement that the value never leaves, and a second grant
+   should not quietly cancel it. `ModelProjection.isBreaking` reads the order as it is: a grant changed between
+   `Aggregate` and `Keyed`, either way, is breaking, and a change to `RowLevel` is not. The projection's monotone
+   and drift laws keep their claims with that one exception, which they check rather than skip: a keyed grant
+   added over an aggregate one always drifts breaking.
+
+7. **The wires.** A level's tag is `"keyed"`, beside `"aggregate"` and `"row"`, which keep their spelling and
+   meaning, so every 0.3.0 stream and projection reads and every existing vector keeps its bytes. Both codecs now
+   read and write the tag through `Policy.levelTag` and `Policy.tryLevel`, where each held a private copy of the
+   table, and an unknown tag is refused by name (`UnknownKind`, listing `Policy.levelTags`). A 0.3.0 reader
+   refuses the new tag the same way, naming the two it knew; that answer was taken from the 0.3.0 package and is
+   pinned by a test. The corpus gains a projection for a subject holding `personal` at `Keyed` and a session stream
+   whose admitted request records the level and whose second request, returning the key under another name, is
+   refused by name. The existing vectors are not regenerated: each carries the provider version that wrote it.
+
+8. **The AI tools carry no grant level, and none is added.** `AiTools` reads the dataset model, which holds
+   classifications and no subject; a level belongs to a subject's grants. What a requester's model reads about its
+   own levels is the projection (D10), which carries the new level. *Reopen if* the AI surface gains a
+   subject-scoped tool.
+
+9. **The laws.** The policy laws' sample gains a subject holding `internal` at `Keyed` and three pipelines (a
+   grouping keyed on the column and re-aggregated, the same returned at the key's grain, and a join keyed on it at
+   its grain); sample adequacy demands the three new codes as it demands every code. The projection laws draw
+   keyed grants and a keyed-then-re-aggregated count, and demand a keyed grant, a keyed grant over an aggregate
+   one, and an admission at the keyed level. The grain ruling's tests were seen red with its refusal removed.
+
+Ruling 4 of D5 is amended in place with this decision's date and reason.
+
 ## 2026-11-16 — D17: a recording session admits and records a request's grouped operands (Phase 36)
 
 D16 taught the check, the policy and the provider to carry grouped operands, and left the recording session as
@@ -1168,7 +1256,8 @@ REWRITING (steps added to the pipeline, which a reader can inspect). Ten rulings
    placement only for pipelines ending in a page). *Reopen if* a dialect author needs to lower ad hoc pipelines
    outside the laws.
 2. **The subject is a value, and the default is deny.** `Subject` is a principal, its attributes and its grants;
-   the domain resolves no identity. A grant names a classification and a level, `Aggregate` or `RowLevel`.
+   the domain resolves no identity. A grant names a classification and a level, `Aggregate` or `RowLevel`
+   (and, since D18, `Keyed`).
    A subject with no grants is refused whole (`DB-GRANT-NONE`), and a column whose classification it holds no
    grant over is unreadable (`DB-GRANT-COLUMN`). A pipeline that reads no column (a projection to nothing)
    still answers a row count under the row policy, to any subject holding some grant. *Reopen if* counting a
@@ -1184,13 +1273,19 @@ REWRITING (steps added to the pipeline, which a reader can inspect). Ten rulings
    row's value). Any row-wise use is refused (`DB-GRANT-AGGREGATE-ONLY`) and named: a predicate, a grouping or
    join key, a sort key, a window or pivot input, a row compared whole, a result column. That includes a filter
    ahead of an aggregate, which is conservative. *Reopen if* a filter on an aggregate-only column ahead of a
-   floored aggregate is wanted, with the argument that the floor covers it.
+   floored aggregate is wanted, with the argument that the floor covers it. *Amended 2026-11-17 (D18, Phase 40):*
+   a consumer's cubes join their tables on a pseudonymous key and group on one before aggregating, so this ruling
+   refused every one of them, while `RowLevel` admitted a statement returning the keys. For a column held at the
+   new `Keyed` level, a grouping key and a join key are no longer row-wise uses: that level admits them besides
+   what this ruling admits, and keeps the column's value and its grain out of the result. For a column held at
+   `Aggregate` this ruling stands as written.
 5. **The group floor is a rewrite.** A grouping that aggregates an aggregate-only column gains one `Count` per
    such input column (the evaluator's `Count` counts present cells, so it is the number of contributors), a
    `Filter` keeping groups at or above the model's floor, and a `Project` back to the written columns. Without a
    declared floor it is refused (`DB-GROUP-FLOOR-UNDECLARED`). An aggregate over already-aggregated columns needs
    no second floor. `Min` and `Max` over a group at the floor still answer one row's value; that is recorded, not
-   prevented. *Reopen* with a model-declared rule naming the aggregates a classification admits.
+   prevented. *Reopen* with a model-declared rule naming the aggregates a classification admits. (D18.5: the
+   floor holds unchanged for a column held at `Keyed`; D18.4: there a `Min` or `Max` answer is held as a key.)
 6. **A row policy is a model predicate over the subject's attributes.** A policy's `Param`s name subject
    attributes and are substituted as values before the policy is applied, so a request's bindings never reach
    it; an attribute the subject lacks is refused, naming it (`DB-ROW-POLICY-ATTRIBUTE`). The source's policies

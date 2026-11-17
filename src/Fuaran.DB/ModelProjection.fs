@@ -85,11 +85,15 @@ type ProjectionDrift =
 /// its hash, its drift verdict, the requester-side check, and its canonical wire. Pure.
 module ModelProjection =
 
-    let private rank (l: GrantLevel option) =
-        match l with
-        | None -> 0
-        | Some GrantLevel.Aggregate -> 1
-        | Some GrantLevel.RowLevel -> 2
+    /// Whether a subject reading at `wide` may read everything one reading at `narrow` may. The levels
+    /// are not a chain: a keyed grant admits keys an aggregate grant refuses, and holds as a key the
+    /// answer of a `Min`, `Max` or `Median` an aggregate grant returns (D18), so neither covers the other.
+    let private covers (wide: GrantLevel option) (narrow: GrantLevel option) =
+        match narrow, wide with
+        | None, _
+        | _, Some GrantLevel.RowLevel -> true
+        | Some n, Some w -> n = w
+        | Some _, None -> false
 
     let private column (readable: Set<string>) (n: ModelNode) : ModelNode option =
         match n.Kind with
@@ -277,11 +281,6 @@ module ModelProjection =
     [<Literal>]
     let Version = 1
 
-    let private levelTag (l: GrantLevel) =
-        match l with
-        | GrantLevel.Aggregate -> "aggregate"
-        | GrantLevel.RowLevel -> "row"
-
     /// A projection as a `JVal`: `{"$type":"modelProjection","version":1,"model","grants"}`.
     let encodeJson (p: ProjectedModel) : JVal =
         Canonical.typed
@@ -292,7 +291,9 @@ module ModelProjection =
               JArr(
                   p.Grants
                   |> List.map (fun g ->
-                      JObj [ "classification", JStr g.Classification; "level", JStr(levelTag g.Level) ])
+                      JObj
+                          [ "classification", JStr g.Classification
+                            "level", JStr(Policy.levelTag g.Level) ])
               ) ]
 
     /// A projection's canonical text: keys sorted, one spelling per value.
@@ -312,16 +313,9 @@ module ModelProjection =
             let! c = str path "classification" fs
             let! tag = str path "level" fs
 
-            match tag with
-            | "aggregate" ->
-                return
-                    { Classification = c
-                      Level = GrantLevel.Aggregate }
-            | "row" ->
-                return
-                    { Classification = c
-                      Level = GrantLevel.RowLevel }
-            | other -> return! Error(WireError.UnknownKind(path + ".level", other, [ "aggregate"; "row" ]))
+            match Policy.tryLevel tag with
+            | Some level -> return { Classification = c; Level = level }
+            | None -> return! Error(WireError.UnknownKind(path + ".level", tag, Policy.levelTags))
         }
 
     /// A projection from a `JVal`. Strict as the model's codec, and more: a text that decodes but is
@@ -433,7 +427,7 @@ module ModelProjection =
             | FieldChange.Label _
             | FieldChange.Description _
             | FieldChange.Ext _ -> false
-        | ProjectionChange.GrantChanged(_, from, into) -> rank into < rank from
+        | ProjectionChange.GrantChanged(_, from, into) -> not (covers into from)
 
     /// The drift verdict of a fresh projection against a pinned one, in the names a pipeline reads:
     /// columns added, removed, retyped and amended per table (`Schema.diff`; a rename is a removal and an
@@ -495,7 +489,8 @@ module ModelProjection =
     /// The projection's laws (`validator:Fuaran.DB.ModelProjection.Laws`), over generated models,
     /// grants and pipelines: the projection is total, pure and idempotent, monotone in the grants,
     /// and a well-formed model; it never carries what it withholds, and two models that differ only
-    /// there project to the same bytes; its wire round-trips; more grants are never a breaking drift;
+    /// there project to the same bytes; its wire round-trips; more grants are never a breaking drift,
+    /// except a keyed grant governing an aggregate one, which always is (D18);
     /// and a pipeline the projection admits is one the custodian's column authorisation admits, with
     /// the same columns at the same levels. Each verdict the laws read carries Core's sample-adequacy
     /// guard, so a generator that never reached it is red.
@@ -680,12 +675,16 @@ module ModelProjection =
 
             let grants =
                 [ for c in classifications do
-                      match below 3 with
+                      match below 4 with
                       | 0 -> ()
                       | 1 ->
                           yield
                               { Classification = c
                                 Level = GrantLevel.Aggregate }
+                      | 2 ->
+                          yield
+                              { Classification = c
+                                Level = GrantLevel.Keyed }
                       | _ ->
                           yield
                               { Classification = c
@@ -704,7 +703,7 @@ module ModelProjection =
             let wider =
                 grants
                 @ [ { Classification = pick classifications
-                      Level = pick [ GrantLevel.Aggregate; GrantLevel.RowLevel ] } ]
+                      Level = pick [ GrantLevel.Aggregate; GrantLevel.Keyed; GrantLevel.RowLevel ] } ]
 
             // The twin: every physical identifier, policy, limit, fingerprint and recording rule moved,
             // and, where a classification is unreadable, a column of it in every table and a table of
@@ -936,13 +935,24 @@ module ModelProjection =
                         | [] -> []
                         | xs -> if chance 2 then [ pick xs ] else []
 
-                    Some
-                        [ GroupBy(
-                              keys,
-                              [ { Name = "n"
-                                  Fn = Count
-                                  Of = pick readable } ]
-                          ) ]
+                    let keyed =
+                        Model.columns start
+                        |> List.filter (fun (_, c) -> Policy.level grants c.Classification = Some GrantLevel.Keyed)
+                        |> List.map (fun (_, c) -> c.Name)
+
+                    let count (keys: string list) =
+                        GroupBy(
+                            keys,
+                            [ { Name = "n"
+                                Fn = Count
+                                Of = pick readable } ]
+                        )
+
+                    // Half the time over a keyed column, the count is keyed on it first and then
+                    // re-aggregated to the grain of the row-level keys, as a keyed grant admits (D18).
+                    match keyed with
+                    | k :: _ when chance 2 -> Some [ count [ k ]; GroupBy([], [ { Name = "t"; Fn = Sum; Of = "n" } ]) ]
+                    | _ -> Some [ count keys ]
 
             let pipeline =
                 match below 6 with
@@ -1020,6 +1030,7 @@ module ModelProjection =
             [ "both admit"
               "both admit a join"
               "both admit an aggregate-only column"
+              "both admit a keyed column"
               "withheld, the custodian admits"
               "withheld, the custodian refuses"
               "refused, the custodian refuses" ]
@@ -1029,6 +1040,8 @@ module ModelProjection =
             [ "wider grants read more"
               "no readable classification"
               "an aggregate-only grant"
+              "a keyed grant"
+              "a keyed grant over an aggregate one"
               "a table withheld whole"
               "a relation withheld" ]
 
@@ -1080,10 +1093,19 @@ module ModelProjection =
                         | Some why -> note wellFormed (sprintf "%s: %s: %s" at why (encode p))
                         | None -> ()
 
+                    // The one place more grants read differently rather than more: a keyed grant joining
+                    // an aggregate one over the same classification governs it (D18).
+                    let keyedOverAggregate (cls: string) =
+                        Policy.level p.Grants cls = Some GrantLevel.Aggregate
+                        && Policy.level wide.Grants cls = Some GrantLevel.Keyed
+
+                    let narrowed = classifications |> List.exists keyedOverAggregate
+
                     let lowered =
                         classifications
                         |> List.exists (fun cls ->
-                            rank (Policy.level wide.Grants cls) < rank (Policy.level p.Grants cls))
+                            not (covers (Policy.level wide.Grants cls) (Policy.level p.Grants cls))
+                            && not (keyedOverAggregate cls))
 
                     if not (Set.isSubset (ids p) (ids wide)) || lowered then
                         note monotone (sprintf "%s: wider grants lost something: %s vs %s" at (encode p) (encode wide))
@@ -1113,7 +1135,9 @@ module ModelProjection =
 
                     if not (List.isEmpty self.Changes) then
                         note drifts (sprintf "%s: a projection drifts from itself: %A" at self.Changes)
-                    elif not (List.isEmpty up.Breaking) then
+                    elif narrowed && List.isEmpty up.Breaking then
+                        note drifts (sprintf "%s: a keyed grant over an aggregate one did not drift breaking" at)
+                    elif not narrowed && not (List.isEmpty up.Breaking) then
                         note drifts (sprintf "%s: more grants drifted breaking: %A" at up.Breaking)
                     elif List.isEmpty down.Breaking <> (p = wide) then
                         note
@@ -1128,6 +1152,12 @@ module ModelProjection =
 
                     if p.Grants |> List.exists (fun g -> g.Level = GrantLevel.Aggregate) then
                         bump shapes "an aggregate-only grant"
+
+                    if p.Grants |> List.exists (fun g -> g.Level = GrantLevel.Keyed) then
+                        bump shapes "a keyed grant"
+
+                    if narrowed then
+                        bump shapes "a keyed grant over an aggregate one"
 
                     if List.length (Model.tables p.Model) < List.length (Model.tables c.Model) then
                         bump shapes "a table withheld whole"
@@ -1149,6 +1179,9 @@ module ModelProjection =
 
                         if mine |> List.exists (fun (_, l) -> l = GrantLevel.Aggregate) then
                             bump verdicts "both admit an aggregate-only column"
+
+                        if mine |> List.exists (fun (_, l) -> l = GrantLevel.Keyed) then
+                            bump verdicts "both admit a keyed column"
                     | Ok mine, Ok theirs ->
                         note agrees (sprintf "%s: the columns differ: %A vs %A over %A" at mine theirs c.Pipeline)
                     | Ok _, Error r ->
@@ -1174,14 +1207,16 @@ module ModelProjection =
               law "the projection is pure: projecting twice answers the same projection" pure'
               law "the projection is idempotent: a projection is its own projection" idempotent
               law "a well-formed model projects to a well-formed model that is a projection" wellFormed
-              law "the projection is monotone in the grants: more grants never remove a part or lower a level" monotone
+              law
+                  "the projection is monotone in the grants: more grants never remove a part or lower a level, a keyed grant governing an aggregate one aside"
+                  monotone
               law
                   "the projection never carries a physical identifier, row policy, limit, fingerprint, recording rule, unreadable classification or unreadable table"
                   withholds
               law "two models that differ only in what the grants cannot read project to the same bytes" invariant
               law "the projection's wire decodes to the projection and re-encodes to its own bytes" wire
               law
-                  "a projection does not drift from itself, more grants never drift breaking, and fewer drift breaking iff they read less"
+                  "a projection does not drift from itself, more grants never drift breaking unless a keyed grant governs an aggregate one (which always does), and fewer drift breaking iff they read less"
                   drifts
               law
                   "a pipeline the projection admits is one the custodian's column authorisation admits, with the same columns at the same levels"

@@ -348,6 +348,73 @@ let operandStream () : Session =
 
     s'
 
+// ---- a keyed grant (Phase 40) ----
+
+/// The operand model with the customer key classified `personal` on both tables, and a group floor of
+/// two declared, for a subject that reads personal columns only as keys and in aggregate.
+let keyedModel: ModelNode =
+    let personal (n: ModelNode) =
+        match n.Kind with
+        | NodeKind.Column c ->
+            { n with
+                Kind = NodeKind.Column { c with Classification = "personal" } }
+        | _ -> failwith "not a column"
+
+    operandModelWith [ "public" ]
+    |> Sample.replace "c:orders.customer_id" personal
+    |> Sample.replace "c:customers.customer_id" personal
+    |> Sample.replace "l:cost" (fun n ->
+        match n.Kind with
+        | NodeKind.Limit l ->
+            { n with
+                Kind = NodeKind.Limit { l with MinGroupSize = Some 2 } }
+        | _ -> failwith "not a limit")
+
+/// A subject reading public columns row by row and personal columns only as keys and in aggregate.
+let keyholder: Subject =
+    { analyst with
+        Principal = "keyholder"
+        Grants =
+            [ { Classification = "public"
+                Level = GrantLevel.RowLevel }
+              { Classification = "personal"
+                Level = GrantLevel.Keyed } ] }
+
+/// The customers joined on their key to each one's largest order, then re-aggregated to one row: the
+/// key keys the operand's grouping and the join, and never reaches the result.
+let keyedPipeline: Transform list =
+    [ Project [ "customer_id", "customer_id" ]
+      Join(Ref "spend", [ "customer_id", "customer_id" ], Inner)
+      GroupBy(
+          [],
+          [ { Name = "customers"
+              Fn = Count
+              Of = "customer_id" }
+            { Name = "largest"
+              Fn = Max
+              Of = "top" } ]
+      )
+      Limit(Slot.Lit 10, Slot.Lit 0) ]
+
+/// The same join returning the key under another name: refused, naming the result column.
+let keyReturned: Transform list =
+    [ Project [ "customer_id", "customer_id" ]
+      Join(Ref "spend", [ "customer_id", "customer_id" ], Inner)
+      Project [ "customer_id", "customer"; "top", "top" ]
+      Limit(Slot.Lit 10, Slot.Lit 0) ]
+
+/// The keyed session as a stream: the re-aggregated request admitted, lowered and run, then a request
+/// returning the key, refused.
+let keyedStream () : Session =
+    let s, _ = operandSession keyedModel keyholder keyedPipeline
+
+    let s', _ =
+        s
+        |> Session.requestWith "q2" keyholder "customers" [ spend ] keyReturned "2026-10-11T10:00:59Z"
+        |> ok "request q2"
+
+    s'
+
 let private seed = 19030
 let private iterations = 300
 
@@ -1252,7 +1319,70 @@ let tests =
                   Expect.equal (SessionWire.decodeOp text |> ok text) op "the same op"
 
               let payload = Export.statement state records |> ok "statement"
-              Expect.stringContains (Encoding.UTF8.GetString payload) ("\"sha256\":\"" + s.Head + "\"") "the head" ]
+              Expect.stringContains (Encoding.UTF8.GetString payload) ("\"sha256\":\"" + s.Head + "\"") "the head"
+
+          testCase
+              "a keyed subject's request is recorded admitted at the keyed level and round-trips; the key returned is refused by name"
+          <| fun _ ->
+              let s = keyedStream ()
+              let wire = Export.wire s.Records
+              let records, state = SessionWire.read (Some s.Head) wire |> ok "read"
+              Expect.equal (SessionWire.write records) wire "the same bytes"
+              Expect.equal state s.State "the same state"
+
+              for op in opsOf s do
+                  let text = SessionWire.encodeOp op
+                  Expect.equal (SessionWire.decodeOp text |> ok text) op "the same op"
+
+              match (Session.account state "q1" |> Option.get).Verdict with
+              | Some(Verdict.Admitted(_, _, rules, _, _, _)) ->
+                  let granted =
+                      rules
+                      |> List.collect (fun r ->
+                          match r with
+                          | PolicyRule.ColumnsGranted cs -> cs
+                          | _ -> [])
+
+                  Expect.contains
+                      granted
+                      ({ Table = "customers"
+                         Column = "customer_id"
+                         Classification = "personal" },
+                       GrantLevel.Keyed)
+                      "the key is admitted at the keyed level"
+              | other -> failtestf "q1: %A" other
+
+              match (Session.account state "q2" |> Option.get).Verdict with
+              | Some(Verdict.Refused("keyholder", code)) -> Expect.equal code "DB-GRANT-KEY-IN-RESULT" "by name"
+              | other -> failtestf "q2: %A" other
+
+          testCase "a 0.3.0 reader refuses the keyed tag by name, and an unknown tag is refused here at the same path"
+          <| fun _ ->
+              // Recorded 2026-11-17 by decoding this stream's admitted op with the Fuaran.DB.Session 0.3.0
+              // package from nuget.org (the same text with each "keyed" read as "aggregate" decoded there).
+              let refusedBy030 =
+                  WireError.UnknownKind("$.rules[0].columns[0].level", "keyed", [ "aggregate"; "row" ])
+
+              let admitted =
+                  opsOf (keyedStream ())
+                  |> List.find (fun o -> SessionOps.tag o = "admitted")
+                  |> SessionWire.encodeOp
+
+              let path, known =
+                  match refusedBy030 with
+                  | WireError.UnknownKind(p, "keyed", k) -> p, k
+                  | other -> failtestf "%A" other
+
+              Expect.equal
+                  (Policy.levelTags |> List.except known)
+                  [ "keyed" ]
+                  "the one tag this version adds to the two 0.3.0 knew"
+
+              match SessionWire.decodeOp (admitted.Replace("\"level\":\"keyed\"", "\"level\":\"masked\"")) with
+              | Error(WireError.UnknownKind(p, "masked", tags)) ->
+                  Expect.equal p path "the path the 0.3.0 reader named"
+                  Expect.equal tags Policy.levelTags "naming every tag this version knows"
+              | other -> failtestf "an unknown level tag: %A" other ]
 
 // ---- the corpus vectors (`--write-fixtures`) ----
 
@@ -1284,7 +1414,8 @@ let corpusStreams () : (string * string) list =
     [ "worked", Export.wire (worked ()).Records
       "recordable", Export.wire (recordable ()).Records
       "measured", Export.wire (measured ()).Records
-      "operand", Export.wire (operandStream ()).Records ]
+      "operand", Export.wire (operandStream ()).Records
+      "keyed", Export.wire (keyedStream ()).Records ]
 
 /// The measured session's `ran` op: a statement record whose result columns carry their fields.
 let corpusMeasuredRan () : string =

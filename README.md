@@ -22,7 +22,7 @@ No package here opens a connection: the host supplies the executor.
 
 ## Status
 
-Pre-release, on the `0.x` line. 0.1.0 and 0.2.0 of the six packages (`Fuaran.DB`, `Fuaran.DB.Provider`,
+Pre-release, on the `0.x` line. 0.1.0, 0.2.0 and 0.3.0 of the six packages (`Fuaran.DB`, `Fuaran.DB.Provider`,
 `Fuaran.DB.Dialect.SqlServer`, `Fuaran.DB.Dialect.PostgreSql`, `Fuaran.DB.Conformance` and
 `Fuaran.DB.Session`) are tagged and on nuget.org, pushed from their `v*` tags by
 [`publish-packages.yml`](.github/workflows/publish-packages.yml); the standing version is the draft
@@ -33,7 +33,9 @@ Pre-release, on the `0.x` line. 0.1.0 and 0.2.0 of the six packages (`Fuaran.DB`
 check of a pipeline against a model, seeding and drift against a reported schema, a canonical wire codec with
 its conformance corpus in [`wire-fixtures/`](wire-fixtures/), and an AI-tools surface. It also holds the
 policy: for a subject the host supplies, column grants, row policies, cost limits and a minimum group size
-decide on the tree whether a pipeline is admitted, refusing by name or rewriting visibly. For a peer that
+decide on the tree whether a pipeline is admitted, refusing by name or rewriting visibly. A grant reads a
+classification in aggregate only, as a key (a grouping or join key whose value and grain never reach the
+result), or row by row. For a peer that
 holds no credential, the model projects per subject to the part its grants may read, with no physical
 identifier, row policy or limit, and the same bytes whatever the model holds outside it; the peer pins the
 projection by hash, checks a fresh one for drift, and checks a pipeline against it before sending, and what

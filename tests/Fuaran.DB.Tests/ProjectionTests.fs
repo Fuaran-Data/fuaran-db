@@ -14,6 +14,9 @@ let private publicRows = [ grant "public" GrantLevel.RowLevel ]
 let private personalAggregate =
     [ grant "public" GrantLevel.RowLevel; grant "personal" GrantLevel.Aggregate ]
 
+let private personalKeyed =
+    [ grant "public" GrantLevel.RowLevel; grant "personal" GrantLevel.Keyed ]
+
 let private project (grants: Grant list) =
     ModelProjection.project Sample.model grants
 
@@ -84,6 +87,7 @@ let private twin: ModelNode =
 let corpusProjections () : (string * string) list =
     [ "retail-public", ModelProjection.encode (project publicRows)
       "retail-personal-aggregate", ModelProjection.encode (project personalAggregate)
+      "retail-personal-keyed", ModelProjection.encode (project personalKeyed)
       "retail-nothing", ModelProjection.encode (project []) ]
 
 /// The corpus's reject vectors: texts that decode as a model but are not a projection, and texts the
@@ -104,12 +108,7 @@ let corpusRejects () : (string * string * string) list =
                       |> List.map (fun g ->
                           JObj
                               [ "classification", JStr g.Classification
-                                "level",
-                                JStr(
-                                    match g.Level with
-                                    | GrantLevel.Aggregate -> "aggregate"
-                                    | GrantLevel.RowLevel -> "row"
-                                ) ])
+                                "level", JStr(Policy.levelTag g.Level) ])
                   ) ])
 
     let p = project publicRows
@@ -325,6 +324,37 @@ let tests =
                   (Error "DB-GRANT-AGGREGATE-ONLY")
                   "the custodian's own rule, at the requester"
 
+          testCase "a keyed grant is carried, so the requester refuses a key in the result and admits it as a key"
+          <| fun _ ->
+              let p = project personalKeyed
+
+              Expect.contains p.Grants (grant "personal" GrantLevel.Keyed) "the level, carried"
+
+              Expect.equal
+                  (ModelProjection.admits p (Ref "customers") [ Project [ "email", "contact" ] ]
+                   |> Result.mapError ModelProjection.code)
+                  (Error "DB-GRANT-KEY-IN-RESULT")
+                  "the custodian's own rule, at the requester"
+
+              let regrouped =
+                  [ GroupBy(
+                        [ "email" ],
+                        [ { Name = "n"
+                            Fn = Count
+                            Of = "customer_id" } ]
+                    )
+                    GroupBy([], [ { Name = "keys"; Fn = Count; Of = "n" } ]) ]
+
+              match ModelProjection.admits p (Ref "customers") regrouped with
+              | Ok cols -> Expect.contains cols (customerCol "email" "personal", GrantLevel.Keyed) "admitted as a key"
+              | Error r -> failtestf "refused: %s" (ModelProjection.describe r)
+
+              Expect.equal
+                  (ModelProjection.admits p (Ref "customers") (List.take 1 regrouped @ [ Project [ "n", "n" ] ])
+                   |> Result.mapError ModelProjection.code)
+                  (Error "DB-GRANT-KEY-GRAIN")
+                  "the key's grain, at the requester"
+
           testCase "a join brings in the right table's withheld columns, and a name they could take is refused"
           <| fun _ ->
               let p = project publicRows
@@ -465,6 +495,25 @@ let tests =
                   [ ProjectionChange.ColumnRemoved("customers", "email", StringType)
                     ProjectionChange.GrantChanged("personal", Some GrantLevel.Aggregate, None) ]
                   "less is"
+
+              // the levels are not a chain (D18): an aggregate and a keyed grant each admit what the
+              // other refuses, so a change between them is breaking either way, and row level covers both
+              let between (from: Grant list) (into: Grant list) =
+                  (ModelProjection.drift (project from) (project into)).Breaking
+
+              Expect.equal
+                  (between personalAggregate personalKeyed)
+                  [ ProjectionChange.GrantChanged("personal", Some GrantLevel.Aggregate, Some GrantLevel.Keyed) ]
+                  "aggregate to keyed"
+
+              Expect.equal
+                  (between personalKeyed personalAggregate)
+                  [ ProjectionChange.GrantChanged("personal", Some GrantLevel.Keyed, Some GrantLevel.Aggregate) ]
+                  "keyed to aggregate"
+
+              Expect.isEmpty
+                  (between personalKeyed [ grant "public" GrantLevel.RowLevel; grant "personal" GrantLevel.RowLevel ])
+                  "keyed to row level"
 
               let unrelated =
                   Sample.model

@@ -154,7 +154,17 @@ let private stranger: Subject =
         Principal = "stranger"
         Attributes = Map.empty }
 
-let private subjects = [ analyst; hr; outsider; nobody; stranger ]
+/// Reads departments only as keys and in aggregate (Phase 40): a department may key a grouping or a
+/// join, and never reaches the result.
+let private keyholder: Subject =
+    { Principal = "keyholder"
+      Attributes = north
+      Grants =
+        [ grant "public" GrantLevel.RowLevel
+          grant "internal" GrantLevel.Keyed
+          grant "personal" GrantLevel.Aggregate ] }
+
+let private subjects = [ analyst; hr; outsider; nobody; stranger; keyholder ]
 
 // ---- the rows ----
 
@@ -273,6 +283,18 @@ let private templates (n: int) : (string * Transform list) list =
       "a keyless aggregate over a personal column", [ GroupBy([], [ agg "total" Sum "salary" ]); page n ]
       "a group's first salary", [ GroupBy([ "dept" ], [ agg "first" First "salary" ]); page n ]
       "a public aggregate", [ GroupBy([ "region" ], [ agg "n" Count "staff_id" ]); page n ]
+      "a grouping keyed on an internal column, re-aggregated",
+      [ GroupBy([ "dept" ], [ agg "n" Count "staff_id" ])
+        GroupBy([], [ agg "depts" Count "dept"; agg "heads" Sum "n" ])
+        page n ]
+      "a grouping keyed on an internal column, its grain returned",
+      [ GroupBy([ "dept" ], [ agg "n" Count "staff_id" ])
+        Project [ "n", "n" ]
+        page n ]
+      "a join keyed on an internal column, its grain returned",
+      [ Join(Ref "projects", onDept, Inner)
+        Project [ "staff_id", "staff_id" ]
+        page n ]
       "an inner join to a policed table",
       [ Join(Ref "depts", onDept, Inner)
         Project [ "staff_id", "staff_id"; "budget", "budget"; "region_right", "dept_region" ]
@@ -527,6 +549,32 @@ let private staffCol (name: string) (cls: string) : ColumnRef =
     { Table = "staff"
       Column = name
       Classification = cls }
+
+let private deptCol (table: string) : ColumnRef =
+    { Table = table
+      Column = "dept"
+      Classification = "internal" }
+
+/// Staff grouped on the department, the grouped operand the keyed cases join (Phase 40).
+let private payroll: Operand =
+    { Name = "payroll"
+      Table = "staff"
+      Pipeline = [ GroupBy([ "dept" ], [ agg "paid" Sum "salary"; agg "heads" Count "staff_id" ]) ] }
+
+/// The keyed cases' re-aggregation: one row per region, the department counted.
+let private keyedTail: Transform list =
+    [ GroupBy([ "region" ], [ agg "total" Sum "budget"; agg "depts" Count "dept" ])
+      page 5 ]
+
+/// Departments joined on their key to their staff grouped on it, then re-aggregated to the region.
+let private keyedSteps (before: Transform list) : Transform list =
+    before
+    @ [ Join(Ref "payroll", onDept, Inner)
+        GroupBy([ "region" ], [ agg "paid" Sum "paid"; agg "depts" Count "dept" ])
+        page 5 ]
+
+let private keyedAdmit (subject: Subject) (steps: Transform list) =
+    Policy.admitWith model subject [ payroll ] (Ref "depts") steps
 
 [<Tests>]
 let tests =
@@ -1067,4 +1115,204 @@ let tests =
                   results
                   |> List.find (fun r -> r.Law.StartsWith "an aggregate over an aggregate-only")
 
-              Expect.isFalse floor.Passed "a stripped floor is caught" ]
+              Expect.isFalse floor.Passed "a stripped floor is caught"
+
+          // ---- the keyed level (Phase 40, DECISIONS.md D18) ----
+
+          testCase
+              "a keyed grant admits a grouping and a join keyed on the column, re-aggregated to a grain without it; an aggregate grant refuses it"
+          <| fun _ ->
+              let a =
+                  match keyedAdmit keyholder (keyedSteps []) with
+                  | Ok a -> a
+                  | Error r -> failtestf "refused: %s" (Policy.describe r)
+
+              let granted =
+                  a.Applied
+                  |> List.collect (fun r ->
+                      match r with
+                      | PolicyRule.ColumnsGranted cs -> cs
+                      | _ -> [])
+
+              Expect.contains granted (deptCol "depts", GrantLevel.Keyed) "the join key, at the keyed level"
+              Expect.contains granted (deptCol "staff", GrantLevel.Keyed) "the operand's grouping key, too"
+
+              // the re-aggregation counts the key, so ruling 5's floor holds over it as over a salary
+              Expect.isTrue
+                  (a.Applied
+                   |> List.exists (fun r ->
+                       match r with
+                       | PolicyRule.GroupFloorApplied(2, 3, cs) -> List.contains (deptCol "depts") cs
+                       | _ -> false))
+                  "the keyed column's count is floored"
+
+              let aggregator =
+                  { keyholder with
+                      Principal = "aggregator"
+                      Grants =
+                          [ grant "public" GrantLevel.RowLevel
+                            grant "internal" GrantLevel.Aggregate
+                            grant "personal" GrantLevel.Aggregate ] }
+
+              match keyedAdmit aggregator (keyedSteps []) with
+              | Error r ->
+                  Expect.equal
+                      r
+                      (PolicyRefusal.AggregateOnly(PolicySite.Step 1, deptCol "staff", "a grouping key"))
+                      "refused by name under the aggregate grant, inside the operand"
+
+                  Expect.equal (Policy.code r) "DB-GRANT-AGGREGATE-ONLY" "its code"
+              | Ok _ -> failtest "admitted under an aggregate grant"
+
+          testCase
+              "the key in the result is refused under any name, through any derivation, naming the result column and the model column"
+          <| fun _ ->
+              let inResult (steps: Transform list) =
+                  match keyedAdmit keyholder steps with
+                  | Error r -> r
+                  | Ok a -> failtestf "admitted: %A" a.Pipeline
+
+              Expect.equal
+                  (inResult
+                      [ Join(Ref "payroll", onDept, Inner)
+                        Project [ "dept", "dept"; "paid", "paid" ]
+                        page 5 ])
+                  (PolicyRefusal.KeyInResult("dept", deptCol "depts"))
+                  "the key itself"
+
+              Expect.equal
+                  (inResult
+                      [ Join(Ref "payroll", onDept, Inner)
+                        Project [ "dept", "d"; "paid", "paid" ]
+                        page 5 ])
+                  (PolicyRefusal.KeyInResult("d", deptCol "depts"))
+                  "the key renamed"
+
+              Expect.equal
+                  (inResult
+                      [ Join(Ref "payroll", onDept, Inner)
+                        Derive("tag", Coalesce [ Col "dept_right"; str "none" ])
+                        Project [ "tag", "tag"; "paid", "paid" ]
+                        page 5 ])
+                  (PolicyRefusal.KeyInResult("tag", deptCol "staff"))
+                  "the operand's key, derived"
+
+              let r =
+                  inResult [ Join(Ref "payroll", onDept, Inner); Project [ "dept", "d" ]; page 5 ]
+
+              Expect.equal (Policy.code r) "DB-GRANT-KEY-IN-RESULT" "its code"
+              Expect.stringContains (Policy.describe r) "result column 'd'" "the result column, named"
+              Expect.stringContains (Policy.describe r) "'depts.dept'" "the model column, named"
+
+          testCase "a keyed column is refused in every use but a key or an aggregate's input, by name"
+          <| fun _ ->
+              let refusedAs (steps: Transform list) (usage: string) =
+                  Expect.equal
+                      (match keyedAdmit keyholder (steps @ keyedTail) with
+                       | Error r -> r
+                       | Ok a -> failtestf "admitted: %A" a.Pipeline)
+                      (PolicyRefusal.KeyOnly(PolicySite.Step 1, deptCol "depts", usage))
+                      usage
+
+              refusedAs [ Filter(Binary(Eq, Col "dept", str "eng")) ] "a filter predicate"
+              refusedAs [ Sort [ Slot.Lit "dept", Asc ] ] "a sort key"
+              refusedAs [ Distinct ] "part of a row compared whole"
+
+              for fn in [ First; Last ] do
+                  Expect.equal
+                      (match keyedAdmit keyholder [ GroupBy([ "region" ], [ agg "f" fn "dept" ]); page 5 ] with
+                       | Error r -> r
+                       | Ok a -> failtestf "admitted: %A" a.Pipeline)
+                      (PolicyRefusal.KeyOnly(
+                          PolicySite.Step 1,
+                          deptCol "depts",
+                          "the first or last value of a group, one row's value"
+                      ))
+                      (sprintf "%A" fn)
+
+              Expect.equal
+                  (Policy.code (PolicyRefusal.KeyOnly(PolicySite.Step 1, deptCol "depts", "x")))
+                  "DB-GRANT-KEY-ONLY"
+                  "its code"
+
+          testCase "a key's Min, Max or Median is a key: it may key a grouping and never reaches the result"
+          <| fun _ ->
+              for fn in [ Min; Max; Median ] do
+                  match keyedAdmit keyholder [ GroupBy([ "region" ], [ agg "m" fn "dept" ]); page 5 ] with
+                  | Error r ->
+                      Expect.equal r (PolicyRefusal.KeyInResult("m", deptCol "depts")) (sprintf "%A returned" fn)
+                  | Ok _ -> failtestf "%A of a key returned" fn
+
+                  match
+                      keyedAdmit
+                          keyholder
+                          [ GroupBy([ "region" ], [ agg "m" fn "dept" ])
+                            GroupBy([], [ agg "n" CountDistinct "m" ])
+                            page 5 ]
+                  with
+                  | Ok _ -> ()
+                  | Error r -> failtestf "%A counted: %s" fn (Policy.describe r)
+
+              // the other aggregates answer no group member: they leave, floored, as under Aggregate
+              for fn in [ Count; CountDistinct; Sum; Mean; StdDev ] do
+                  match keyedAdmit keyholder [ GroupBy([ "region" ], [ agg "a" fn "budget" ]); page 5 ] with
+                  | Ok _ -> ()
+                  | Error r -> failtestf "%A: %s" fn (Policy.describe r)
+
+          testCase "a result still at the key's grain is refused: a grouping or join keyed on it is re-grouped first"
+          <| fun _ ->
+              let grain (steps: Transform list) =
+                  match keyedAdmit keyholder (steps @ [ page 5 ]) with
+                  | Error r -> r
+                  | Ok a -> failtestf "admitted: %A" a.Pipeline
+
+              Expect.equal
+                  (grain [ GroupBy([ "dept" ], [ agg "b" Sum "budget" ]); Project [ "b", "b" ] ])
+                  (PolicyRefusal.KeyGrain(deptCol "depts"))
+                  "one row per department, the department withheld"
+
+              Expect.equal
+                  (grain [ Join(Ref "payroll", onDept, Inner); Project [ "paid", "paid" ] ])
+                  (PolicyRefusal.KeyGrain(deptCol "depts"))
+                  "a join keyed on it"
+
+              Expect.equal
+                  (grain [ Join(Ref "payroll", onDept, Semi); Project [ "region", "region" ] ])
+                  (PolicyRefusal.KeyGrain(deptCol "depts"))
+                  "a semi join keyed on it, a membership test on the key"
+
+              Expect.equal
+                  (grain
+                      [ Join(Ref "payroll", onDept, Inner)
+                        GroupBy([ "region"; "dept" ], [ agg "p" Sum "paid" ])
+                        Project [ "region", "region"; "p", "p" ] ])
+                  (PolicyRefusal.KeyGrain(deptCol "depts"))
+                  "a regrouping still keyed on it"
+
+              Expect.equal (Policy.code (PolicyRefusal.KeyGrain(deptCol "depts"))) "DB-GRANT-KEY-GRAIN" "its code"
+
+              // a grouping that is not keyed on it clears the grain
+              match keyedAdmit keyholder (keyedSteps []) with
+              | Ok _ -> ()
+              | Error r -> failtestf "refused: %s" (Policy.describe r)
+
+          testCase "a keyed grant governs an aggregate grant over the same classification; a row-level one governs both"
+          <| fun _ ->
+              let held (levels: GrantLevel list) =
+                  Policy.level (levels |> List.map (grant "internal")) "internal"
+
+              Expect.equal (held [ GrantLevel.Aggregate; GrantLevel.Keyed ]) (Some GrantLevel.Keyed) "keyed governs"
+              Expect.equal (held [ GrantLevel.Keyed; GrantLevel.Aggregate ]) (Some GrantLevel.Keyed) "in either order"
+
+              Expect.equal
+                  (held [ GrantLevel.Keyed; GrantLevel.RowLevel ])
+                  (Some GrantLevel.RowLevel)
+                  "row level governs"
+
+              Expect.equal (held []) None "none"
+
+              for l in [ GrantLevel.Aggregate; GrantLevel.Keyed; GrantLevel.RowLevel ] do
+                  Expect.equal (Policy.tryLevel (Policy.levelTag l)) (Some l) "its tag reads back"
+
+              Expect.equal Policy.levelTags [ "aggregate"; "keyed"; "row" ] "the tags, narrowest first"
+              Expect.equal (Policy.tryLevel "masked") None "an unknown tag" ]
