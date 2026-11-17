@@ -145,4 +145,147 @@ let tests =
 
               match refused (check (Ref "orders") unbound) with
               | PipelineRefusal.UnknownColumn(1, "password", _) -> ()
-              | other -> failtestf "expected UnknownColumn, got %A" other ]
+              | other -> failtestf "expected UnknownColumn, got %A" other
+
+          // ---- lineage (DECISIONS.md D19) ----
+
+          testCase "a join after a rename of the key follows the key to its model column"
+          <| fun _ ->
+              let pipeline =
+                  [ Project [ "order_id", "ref"; "customer_id", "buyer"; "revenue", "revenue" ]
+                    Join(Ref "customers", [ "buyer", "customer_id" ], Inner) ]
+
+              Expect.isOk (check (Ref "orders") pipeline) "the renamed key is the relation's column"
+
+          testCase "a join after a grouping that keeps the key as a grouping key is admitted"
+          <| fun _ ->
+              let pipeline =
+                  [ GroupBy(
+                        [ "customer_id" ],
+                        [ { Name = "spend"
+                            Fn = Sum
+                            Of = "revenue" } ]
+                    )
+                    Join(Ref "customers", [ "customer_id", "customer_id" ], Left) ]
+
+              Expect.isOk (check (Ref "orders") pipeline) "the grouping keeps the relation"
+
+          testCase "a grouping that aggregates the key loses the relation, and the refusal says the key is an aggregate"
+          <| fun _ ->
+              let pipeline =
+                  [ GroupBy(
+                        [ "channel" ],
+                        [ { Name = "customer_id"
+                            Fn = Max
+                            Of = "customer_id" } ]
+                    )
+                    Join(Ref "customers", [ "customer_id", "customer_id" ], Left) ]
+
+              match refused (check (Ref "orders") pipeline) with
+              | PipelineRefusal.UnresolvedJoinKey(2, "customers", "customer_id", resolved) as r ->
+                  Expect.stringContains resolved "aggregate Max of 'customer_id' at step 1" "names the aggregate"
+                  Expect.stringContains resolved "'channel'" "names the keys the grouping kept"
+                  Expect.stringContains (PipelineCheck.describe r) "join" "described"
+              | other -> failtestf "expected UnresolvedJoinKey, got %A" other
+
+          testCase "a grouping that drops the key loses it from the rows"
+          <| fun _ ->
+              let pipeline =
+                  [ GroupBy(
+                        [ "channel" ],
+                        [ { Name = "spend"
+                            Fn = Sum
+                            Of = "revenue" } ]
+                    )
+                    Join(Ref "customers", [ "customer_id", "customer_id" ], Left) ]
+
+              match refused (check (Ref "orders") pipeline) with
+              | PipelineRefusal.UnknownColumn(2, "customer_id", members) ->
+                  Expect.equal members [ "channel"; "spend" ] "what the grouping kept"
+              | other -> failtestf "expected UnknownColumn, got %A" other
+
+          testCase "a derivation named like the key matches no relation, even one that copies it"
+          <| fun _ ->
+              for e in [ Col "customer_id"; Binary(Add, Col "customer_id", Lit(Int 0)) ] do
+                  let pipeline =
+                      [ Derive("customer_id", e)
+                        Join(Ref "customers", [ "customer_id", "customer_id" ], Inner) ]
+
+                  match refused (check (Ref "orders") pipeline) with
+                  | PipelineRefusal.UnresolvedJoinKey(2, "customers", "customer_id", resolved) ->
+                      Expect.equal resolved "is derived at step 1" "names the derivation"
+                  | other -> failtestf "expected UnresolvedJoinKey, got %A" other
+
+          testCase "a key renamed to the relation's column name, but carrying another column, is refused"
+          <| fun _ ->
+              let pipeline =
+                  [ Project [ "order_id", "customer_id"; "revenue", "revenue" ]
+                    Join(Ref "customers", [ "customer_id", "customer_id" ], Inner) ]
+
+              match refused (check (Ref "orders") pipeline) with
+              | PipelineRefusal.UnrelatedJoin(2, "customers", _, relations) ->
+                  Expect.equal relations [ "customer_id = customer_id" ] "the relation it does not follow"
+              | other -> failtestf "expected UnrelatedJoin, got %A" other
+
+          testCase "a joined table's key, suffixed _right, is followed to its own model column"
+          <| fun _ ->
+              let pipeline =
+                  [ Join(Ref "customers", [ "customer_id", "customer_id" ], Inner)
+                    Join(Ref "orders", [ "customer_id_right", "customer_id" ], Semi) ]
+
+              Expect.isOk (check (Ref "orders") pipeline) "customers.customer_id relates to orders.customer_id"
+
+          testCase "a union loses every key's model column, and says so"
+          <| fun _ ->
+              let pipeline =
+                  [ Union(Ref "orders")
+                    Join(Ref "customers", [ "customer_id", "customer_id" ], Inner) ]
+
+              match refused (check (Ref "orders") pipeline) with
+              | PipelineRefusal.UnresolvedJoinKey(2, "customers", "customer_id", resolved) ->
+                  Expect.stringContains resolved "union at step 1" "names the union"
+              | other -> failtestf "expected UnresolvedJoinKey, got %A" other
+
+          testCase "a grouped operand's key is matched on the left key's lineage, after a rename"
+          <| fun _ ->
+              let operand =
+                  { Name = "per_order"
+                    Table = "order_lines"
+                    Pipeline =
+                      [ GroupBy(
+                            [ "order_id" ],
+                            [ { Name = "items"
+                                Fn = Count
+                                Of = "sku" } ]
+                        ) ] }
+
+              let renamed =
+                  [ Project [ "order_id", "ref"; "revenue", "revenue" ]
+                    Join(Ref "per_order", [ "ref", "order_id" ], Left) ]
+
+              Expect.isOk (PipelineCheck.checkWith model [ operand ] (Ref "orders") renamed) "admitted"
+
+              let derived =
+                  [ Derive("ref", Col "order_id")
+                    Join(Ref "per_order", [ "ref", "order_id" ], Left) ]
+
+              match PipelineCheck.checkWith model [ operand ] (Ref "orders") derived with
+              | Error(PipelineRefusal.UnresolvedJoinKey(2, "per_order", "ref", "is derived at step 1")) -> ()
+              | other -> failtestf "expected UnresolvedJoinKey, got %A" other
+
+          testCase "the staged shapes pass the check: each join key is followed to its model column"
+          <| fun _ ->
+              for name, pipeline in Staged.shapes do
+                  match PipelineCheck.checkWith Staged.model Staged.operands (Ref "order_headers") pipeline with
+                  | Ok _ -> ()
+                  | Error e -> failtestf "%s: %s" name (PipelineCheck.describe e)
+
+          testCase "a join between two stages, neither a model table, is refused by name"
+          <| fun _ ->
+              let pipeline =
+                  Staged.orderStage
+                  @ [ Join(Ref "line_checks", [ "day", "day"; "store", "store" ], Left) ]
+
+              match PipelineCheck.checkWith Staged.model Staged.operands (Ref "order_headers") pipeline with
+              | Error(PipelineRefusal.UnknownTable(_, "line_checks", _)) -> ()
+              | other -> failtestf "expected UnknownTable, got %A" other ]

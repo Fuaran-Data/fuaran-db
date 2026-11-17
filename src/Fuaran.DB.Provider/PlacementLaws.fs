@@ -193,6 +193,8 @@ module PlacementLaws =
           [ Filter(Binary(Eq, Col "s", Param "p_s")) ]
           [ Filter(InParam(Col "s", "p_set")) ]
           [ Filter(Binary(Le, Col "d", Now NowGrain.Date)) ]
+          [ Filter(Binary(Ge, Col "d", Now NowGrain.Date)) ]
+          [ Derive("req_seen", Coalesce [ Col "d"; Now NowGrain.Date ]) ]
           [ Filter(Binary(Eq, Col "s", Lit Null)) ]
           [ Filter(Not(InList(Col "fk", [ Lit(Int 1); Lit(Int 3); Lit Null ]))) ]
           [ Filter(Case([ Binary(Gt, Col "id", Lit(Int 2)), Col "b" ], Lit(Bool false))) ]
@@ -237,6 +239,27 @@ module PlacementLaws =
           // a count over a grouped operand's counts, nulls where the left join matched nothing
           [ Join(Ref "req_cust", [ "fk", "id" ], Left)
             GroupBy([ "b" ], [ agg "req_n" Count "req_cn"; agg "req_seen" Count "req_cmax" ]) ]
+          // joins whose left side is a grouping that keeps the relation's key, each kind, one after a
+          // rename of the key, one to a grouped operand, and one re-aggregated to a coarser grain
+          // (DECISIONS.md D19)
+          [ GroupBy([ "fk" ], [ agg "req_spent" Sum "amt"; agg "req_n" Count "id" ])
+            Join(Ref "customers", [ "fk", "id" ], Left) ]
+          [ GroupBy([ "fk"; "s" ], [ agg "req_n" Count "id" ])
+            Join(Ref "customers", [ "fk", "id" ], Inner) ]
+          [ GroupBy([ "fk" ], [ agg "req_n" Count "id" ])
+            Join(Ref "customers", [ "fk", "id" ], Semi) ]
+          [ GroupBy([ "fk" ], [ agg "req_n" Count "id" ])
+            Join(Ref "customers", [ "fk", "id" ], Anti) ]
+          [ Project [ "id", "req_order"; "fk", "req_buyer"; "amt", "amt"; "s", "s" ]
+            Join(Ref "customers", [ "req_buyer", "id" ], Left) ]
+          [ GroupBy([ "fk" ], [ agg "req_spent" Sum "amt" ])
+            Join(Ref "req_cust", [ "fk", "id" ], Left) ]
+          [ GroupBy([ "fk" ], [ agg "req_spent" Sum "amt" ])
+            Join(Ref "customers", [ "fk", "id" ], Left)
+            GroupBy([ "name" ], [ agg "req_total" Sum "req_spent"; agg "req_k" CountDistinct "fk" ]) ]
+          // a key the grouping aggregated carries no model column: the join places the boundary
+          [ GroupBy([ "s" ], [ agg "fk" Max "fk" ])
+            Join(Ref "customers", [ "fk", "id" ], Left) ]
           // joins to a grouped operand that place the boundary
           [ Join(Ref "req_touch_wide", [ "id", "ref" ], Left) ]
           [ Join(Ref "req_touch_raw", [ "id", "ref" ], Left) ]
@@ -412,7 +435,7 @@ module PlacementLaws =
                     Map.ofList [ "p_set", [ Str "zq-a"; Str "zq-12" ] ]
                 else
                     Map.empty
-              Clock = if below 4 > 0 then Some clock else None }
+              Clock = if below 3 > 0 then Some clock else None }
 
         { Model = model
           Source = source
@@ -644,6 +667,49 @@ module PlacementLaws =
         | Relation.Aggregate(input, _, _, _)
         | Relation.Ordered(input, _, _, _) -> groupedJoins input
 
+    /// Is the relation a grouping under any filter, projection or derive of it: the left side of a join
+    /// placed after a grouping (DECISIONS.md D19)?
+    let rec private groupedLeft (r: Relation) : bool =
+        match r with
+        | Relation.Aggregate _ -> true
+        | Relation.Where(input, _)
+        | Relation.Select(input, _)
+        | Relation.Derive(input, _) -> groupedLeft input
+        | Relation.Scan _
+        | Relation.Join _
+        | Relation.Ordered _ -> false
+
+    /// The kind of every join in the statement whose LEFT side is a grouping.
+    let rec private groupedLeftJoins (r: Relation) : JoinKind list =
+        match r with
+        | Relation.Scan _ -> []
+        | Relation.Join(left, right, kind, _, _) ->
+            (if groupedLeft left then [ kind ] else [])
+            @ groupedLeftJoins left
+            @ groupedLeftJoins right
+        | Relation.Where(input, _)
+        | Relation.Select(input, _)
+        | Relation.Derive(input, _)
+        | Relation.Aggregate(input, _, _, _)
+        | Relation.Ordered(input, _, _, _) -> groupedLeftJoins input
+
+    /// Does a join among the lowered steps read a left key a projection renamed before it?
+    let private joinsOnRenamedKey (lowered: Transform list) : bool =
+        lowered
+        |> List.fold
+            (fun (renamed: Set<string>, found) t ->
+                match t with
+                | Project pairs ->
+                    (pairs
+                     |> List.filter (fun (src, out) -> src <> out || Set.contains src renamed)
+                     |> List.map snd
+                     |> Set.ofList),
+                    found
+                | Join(_, on, _) -> renamed, found || on |> List.exists (fun (l, _) -> Set.contains l renamed)
+                | _ -> renamed, found)
+            (Set.empty, false)
+        |> snd
+
     /// Does a left join feed the relation?
     let rec private leftJoined (r: Relation) : bool =
         match r with
@@ -707,6 +773,8 @@ module PlacementLaws =
         let derivedKeys = System.Collections.Generic.Dictionary<string, int>()
         let operandR: string option ref = ref None
         let operandJoins = System.Collections.Generic.Dictionary<string, int>()
+        let leftGroupedR: string option ref = ref None
+        let leftGroupedJoins = System.Collections.Generic.Dictionary<string, int>()
         let countR: string option ref = ref None
         let countSites = System.Collections.Generic.Dictionary<string, int>()
         let requestR: string option ref = ref None
@@ -851,6 +919,31 @@ module PlacementLaws =
                                     whole
                                     c.Pipeline)
 
+                    let leftKinds =
+                        groupedLeftJoins lowered.Statement.Form
+                        |> List.map (sprintf "join %A after a grouping")
+
+                    let renamed =
+                        if joinsOnRenamedKey (List.take split.Lowered planned) then
+                            [ "join on a renamed key" ]
+                        else
+                            []
+
+                    match leftKinds @ renamed with
+                    | [] -> ()
+                    | sites ->
+                        sites |> List.distinct |> List.iter (bump leftGroupedJoins)
+
+                        if not agree then
+                            note
+                                leftGroupedR
+                                (sprintf
+                                    "%s: the statement joining after a grouping or a rename answered %A; the reference, %A (pipeline=%A)"
+                                    at
+                                    split'
+                                    whole
+                                    c.Pipeline)
+
                     match countsIn lowered.Statement.Form with
                     | [] -> ()
                     | sites ->
@@ -920,6 +1013,11 @@ module PlacementLaws =
               operandR.Value
           LawResult.subject
               family
+              "a join whose left side is a grouping on the relation's key, or whose key a projection renamed, equals the reference's join"
+              iterations
+              leftGroupedR.Value
+          LawResult.subject
+              family
               "a lowered Count equals the reference's: nulls uncounted, an all-null group 0, a null key one group"
               iterations
               countR.Value
@@ -975,6 +1073,17 @@ module PlacementLaws =
                     "grouped operand join Left"
                     "grouped operand join Semi"
                     "grouped operand join Anti" ])
+          SampleAdequacy.reached
+              family
+              "join after a grouping or a rename"
+              seed
+              (counts
+                  leftGroupedJoins
+                  [ "join Inner after a grouping"
+                    "join Left after a grouping"
+                    "join Semi after a grouping"
+                    "join Anti after a grouping"
+                    "join on a renamed key" ])
           SampleAdequacy.reached
               family
               "count"

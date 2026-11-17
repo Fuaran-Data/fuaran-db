@@ -226,8 +226,36 @@ module FoldSplit =
                 |> Option.map (fun o -> i + 1, o)
             | _ -> None)
 
+    /// The local suffix: the planned steps after the boundary, which the reference evaluator runs over
+    /// the statement's rows (DECISIONS.md D19). Empty when every planned step lowers. A consumer that
+    /// needs the suffix to read only rows at the grain it returns asserts that no step here groups or
+    /// joins.
+    let suffix (report: SplitReport) : Transform list =
+        report.Plan.Planned |> List.skip report.Lowered
+
+    /// A planned step's verb, as `describe` names it.
+    let private verb (t: Transform) : string =
+        match t with
+        | Filter _ -> "filter"
+        | Project _ -> "project"
+        | Derive(name, _) -> sprintf "derive '%s'" name
+        | Join _ -> "join"
+        | GroupBy _ -> "groupBy"
+        | Sort _ -> "sort"
+        | Limit _ -> "limit"
+        | Pivot _ -> "pivot"
+        | Unpivot _ -> "unpivot"
+        | Window _ -> "window"
+        | Distinct -> "distinct"
+        | Union _ -> "union"
+        | Intersect _ -> "intersect"
+        | Except _ -> "except"
+        | Define _ -> "define"
+        | Fit _ -> "fit"
+        | Predict _ -> "predict"
+
     /// The split as sentences: what the planner rewrote, which steps lower, each derive and each grouped
-    /// operand that lowered, and where the boundary fell and why.
+    /// operand that lowered, where the boundary fell and why, and the local suffix it leaves.
     let describe (report: SplitReport) : string list =
         let planned = List.length report.Plan.Planned
 
@@ -246,7 +274,13 @@ module FoldSplit =
         let boundary =
             match report.Boundary with
             | None -> [ "every planned step lowers; nothing runs locally" ]
-            | Some r -> [ sprintf "the boundary falls at step %d: %s" (Refusal.step r) (Refusal.describe r) ]
+            | Some r ->
+                [ sprintf "the boundary falls at step %d: %s" (Refusal.step r) (Refusal.describe r)
+                  sprintf
+                      "the local suffix is steps %d to %d, run over the statement's rows: %s"
+                      (report.Lowered + 1)
+                      planned
+                      (suffix report |> List.map verb |> String.concat ", ") ]
 
         let derives =
             derived report

@@ -195,9 +195,15 @@ let private describeEngine (conn: NpgsqlConnection) : string * string =
 /// The kit against the configured engine, in a database created for the run and dropped after it.
 /// `linguistic` creates the database under the ICU root locale, whose order is not the reference's, so a
 /// dialect that does not re-declare the collation it reads strings under is caught.
-let runAgainstServer (dialect: Dialect) (linguistic: bool) (connectionString: string) : Report * string * string =
-    let database =
-        "fuaran_db_conformance_" + Guid.NewGuid().ToString("N").Substring(0, 12)
+/// `f` over a connection to a fresh UTF-8 database on the configured engine, named from `prefix` and
+/// dropped afterwards. `linguistic` creates it under the ICU root locale.
+let private withDatabase
+    (prefix: string)
+    (linguistic: bool)
+    (connectionString: string)
+    (f: NpgsqlConnection -> 'a)
+    : 'a =
+    let database = prefix + Guid.NewGuid().ToString("N").Substring(0, 12)
 
     use admin = new NpgsqlConnection(connectionString)
     admin.Open()
@@ -218,14 +224,51 @@ let runAgainstServer (dialect: Dialect) (linguistic: bool) (connectionString: st
         builder.Pooling <- false
         use conn = new NpgsqlConnection(builder.ConnectionString)
         conn.Open()
+        f conn
+    finally
+        NpgsqlConnection.ClearAllPools()
+        nonQuery admin ("DROP DATABASE " + PostgreSql.quote database + " WITH (FORCE)")
+
+/// The kit against the configured engine, in a database created for the run and dropped after it.
+/// `linguistic` creates the database under the ICU root locale, whose order is not the reference's, so a
+/// dialect that does not re-declare the collation it reads strings under is caught.
+let runAgainstServer (dialect: Dialect) (linguistic: bool) (connectionString: string) : Report * string * string =
+    withDatabase "fuaran_db_conformance_" linguistic connectionString (fun conn ->
         let version, collation = describeEngine conn
 
         match Kit.run dialect (pgHost conn) with
         | Ok report -> report, version, collation
-        | Error e -> failtestf "the seed could not be placed: %s" e
-    finally
-        NpgsqlConnection.ClearAllPools()
-        nonQuery admin ("DROP DATABASE " + PostgreSql.quote database + " WITH (FORCE)")
+        | Error e -> failtestf "the seed could not be placed: %s" e)
+
+/// The staged shapes over the configured engine (DECISIONS.md D19): each admitted under the row-level
+/// grant, lowered through the dialect, run by the engine, its suffix finished, and compared with the
+/// reference. Answers each shape's name and whether it agreed, with both answers where it did not.
+let stagedAgainstServer (connectionString: string) : (string * Result<unit, string>) list =
+    withDatabase "fuaran_db_conformance_" false connectionString (fun conn ->
+        let host = pgHost conn
+
+        match host.Seed Sample.Staged.physical with
+        | Error e -> failtestf "the staged rows could not be placed: %s" e
+        | Ok() ->
+            let execute (s: Statement) =
+                host.Execute s
+                |> Result.mapError (function
+                    | HostFailure.Failed detail -> detail
+                    | HostFailure.Refused e -> sprintf "refused %A" e)
+
+            [ for name, pipeline in Sample.Staged.shapes ->
+                  name,
+                  match Sample.Staged.admit Sample.Staged.rowLevel pipeline with
+                  | Error r -> Error(Policy.describe r)
+                  | Ok admitted ->
+                      Sample.Staged.placed PostgreSql.dialect execute admitted
+                      |> Result.bind (fun (_, answer) ->
+                          let expected = Sample.Staged.reference admitted
+
+                          if Kit.agrees true answer expected then
+                              Ok()
+                          else
+                              Error(sprintf "the engine answered %A; the reference %A" answer expected)) ])
 
 /// One instant per unit the engine holds, as ticks past 2026-06-02T09:30:15 and its canonical text.
 let private timestampsByUnit =
@@ -236,24 +279,7 @@ let private timestampsByUnit =
 /// Per unit, in a database made for the run: a column created at the unit reports the unit back through
 /// `format_type`, and an instant bound at the unit reads back whole.
 let timestampRoundTrip (connectionString: string) =
-    let database = "fuaran_db_units_" + Guid.NewGuid().ToString("N").Substring(0, 12)
-
-    use admin = new NpgsqlConnection(connectionString)
-    admin.Open()
-
-    nonQuery
-        admin
-        ("CREATE DATABASE "
-         + PostgreSql.quote database
-         + " TEMPLATE template0 ENCODING 'UTF8'")
-
-    try
-        let builder = NpgsqlConnectionStringBuilder(connectionString)
-        builder.Database <- database
-        builder.Pooling <- false
-        use conn = new NpgsqlConnection(builder.ConnectionString)
-        conn.Open()
-
+    withDatabase "fuaran_db_units_" false connectionString (fun conn ->
         for unit, _, text in timestampsByUnit do
             let ty = TimestampType unit
             let table = "at_" + ColumnType.tag ty
@@ -284,10 +310,7 @@ let timestampRoundTrip (connectionString: string) =
             Expect.equal
                 (PostgreSql.decodeCell ty (select.ExecuteScalar()))
                 (Ok(Timestamp text))
-                (sprintf "%A reads back whole" unit)
-    finally
-        NpgsqlConnection.ClearAllPools()
-        nonQuery admin ("DROP DATABASE " + PostgreSql.quote database + " WITH (FORCE)")
+                (sprintf "%A reads back whole" unit))
 
 /// One line per fixture: its verdict, how many planned steps the engine ran, and where the boundary fell.
 /// The record a certification cites, so every fixture is named, not only those that differed.
@@ -735,6 +758,18 @@ let tests =
 
                          Expect.equal u 0 "no fixture differs unexpectedly"
                          Expect.equal (caseInsensitive report) [] "strings compare case-sensitively here"
+
+                     testCase "the staged shapes against the configured PostgreSQL equal the reference"
+                     <| fun _ ->
+                         for name, verdict in stagedAgainstServer connectionString do
+                             printfn
+                                 "staged shape (postgresql, engine): %s %s"
+                                 name
+                                 (match verdict with
+                                  | Ok() -> "agreed"
+                                  | Error why -> "DIFFERED: " + why)
+
+                             Expect.isOk verdict name
 
                      // The falsifier's converse (Phase 4): over the same linguistic database the certified
                      // dialect still agrees, so it is the re-declared `COLLATE "C"` that turns the run green,

@@ -36,6 +36,10 @@ type PipelineRefusal =
     /// model's tables or another operand already hold, or over a pipeline that brings in a second
     /// source. `reason` says which.
     | OperandMisused of step: int * operand: string * reason: string
+    /// A join key that carries no model column, so it matches no relation the model declares
+    /// (DECISIONS.md D19): `resolved` says what the key resolved to — a derivation, an aggregate (a
+    /// grouping that did not keep the column as a key), or a step after which no column carries one.
+    | UnresolvedJoinKey of step: int * table: string * key: string * resolved: string
 
 /// A grouped operand (DECISIONS.md D16): a named sub-pipeline over one modelled table, which a `Join`
 /// brings in as its right side by naming it, `Join(Ref name, on, kind)`. The transform algebra's
@@ -144,6 +148,13 @@ module PipelineCheck =
                      "none for that table"
                  else
                      String.concat "; " relations)
+        | PipelineRefusal.UnresolvedJoinKey(s, t, key, resolved) ->
+            sprintf
+                "step %d joins table '%s' on key '%s', which %s; a key matches a declared relation only while it carries the model column it came from"
+                s
+                t
+                key
+                resolved
         | PipelineRefusal.OpenWalk(s, reason) ->
             sprintf "step %d reads from a column set the walk cannot close: %s" s reason
         | PipelineRefusal.EmbeddedOperand s -> sprintf "step %d brings in an embedded table, not a modelled source" s
@@ -183,12 +194,161 @@ module PipelineCheck =
     let private tableNames (root: ModelNode) =
         Model.tables root |> List.map (fun (_, t) -> t.Name)
 
+    /// What each column name reaching a step resolved to (DECISIONS.md D19): the model column it carries
+    /// unchanged, as `(table id, column id)`, or what took the model column away. A name the map does not
+    /// hold resolves to `Otherwise`.
+    type private Lineage =
+        { Columns: Map<string, Result<string * string, string>>
+          Otherwise: string }
+
+    [<RequireQualifiedAccess>]
+    module private Lineage =
+
+        /// The columns of a modelled table, each carrying itself.
+        let ofTable (node: ModelNode) : (string * Result<string * string, string>) list =
+            Model.columns node |> List.map (fun (c, spec) -> spec.Name, Ok(node.Id, c.Id))
+
+        let start (node: ModelNode) : Lineage =
+            { Columns = ofTable node |> Map.ofList
+              Otherwise = "carries no model column" }
+
+        let resolve (l: Lineage) (name: string) : Result<string * string, string> =
+            match Map.tryFind name l.Columns with
+            | Some r -> r
+            | None -> Error l.Otherwise
+
+        let private keep (names: string list) (l: Lineage) : Map<string, Result<string * string, string>> =
+            names |> List.map (fun n -> n, resolve l n) |> Map.ofList
+
+        /// The lineage after one step. `right` is what a join brings in, each name as the joined rows
+        /// carry it (`left` the names before the join, so a right name the left already carries takes
+        /// the reference's `_right` suffix).
+        let step
+            (step: int)
+            (left: string list)
+            (right: (string * Result<string * string, string>) list)
+            (l: Lineage)
+            (t: Transform)
+            : Lineage =
+            match t with
+            | Filter _
+            | Sort _
+            | Limit _
+            | Distinct
+            | Define _
+            // The rows an intersection or a difference keeps are the left side's own.
+            | Intersect _
+            | Except _ -> l
+            | Project pairs ->
+                { l with
+                    Columns = pairs |> List.map (fun (src, out) -> out, resolve l src) |> Map.ofList }
+            | Derive(name, _) ->
+                { l with
+                    Columns = Map.add name (Error(sprintf "is derived at step %d" step)) l.Columns }
+            | Window spec ->
+                { l with
+                    Columns = Map.add spec.As (Error(sprintf "is a window's output at step %d" step)) l.Columns }
+            | GroupBy(keys, aggs) ->
+                let aggregated =
+                    aggs
+                    |> List.map (fun a ->
+                        a.Name,
+                        Error(
+                            sprintf
+                                "is the aggregate %A of '%s' at step %d, where the grouping keeps %s as its keys"
+                                a.Fn
+                                a.Of
+                                step
+                                (if List.isEmpty keys then
+                                     "nothing"
+                                 else
+                                     keys |> List.map (sprintf "'%s'") |> String.concat ", ")
+                        ))
+
+                { Columns = Map.fold (fun m k v -> Map.add k v m) (keep keys l) (Map.ofList aggregated)
+                  Otherwise = sprintf "was dropped by the grouping at step %d" step }
+            | Join(_, _, kind) ->
+                match kind with
+                | Semi
+                | Anti -> l
+                | Inner
+                | Left
+                | Right
+                | Outer ->
+                    { l with
+                        Columns =
+                            right
+                            |> List.fold
+                                (fun m (n, r) -> Map.add (if List.contains n left then n + "_right" else n) r m)
+                                l.Columns }
+            | Union _ ->
+                { Columns = Map.empty
+                  Otherwise = sprintf "comes through the union at step %d, whose rows are two sources' rows" step }
+            | Pivot spec ->
+                { Columns = keep spec.Index l
+                  Otherwise = sprintf "is a pivoted column at step %d" step }
+            | Unpivot(ids, _) ->
+                { Columns = keep ids l
+                  Otherwise = sprintf "is an unpivoted column at step %d" step }
+            | Fit _
+            | Predict _ ->
+                { Columns = Map.empty
+                  Otherwise = sprintf "comes through the model step at step %d" step }
+
     type private Walk =
         {
             Knowledge: SchemaKnowledge
             /// The ids of the tables whose rows the pipeline has brought in so far.
             Tables: string list
+            /// What each column name resolves to (DECISIONS.md D19).
+            Lineage: Lineage
         }
+
+    /// Does the model declare a relation between one left table and `right` (a table id) on exactly
+    /// these pairs of `(left table id, left column id)` and right column id, in either orientation?
+    let private declaredOn (root: ModelNode) (right: string) (pairs: ((string * string) * string) list) : bool =
+        match pairs |> List.map (fun ((t, _), _) -> t) |> List.distinct with
+        | [ left ] ->
+            let wanted = pairs |> List.map (fun ((_, l), r) -> l, r) |> Set.ofList
+
+            Model.joins root
+            |> List.exists (fun (_, j) ->
+                (j.Left = left && j.Right = right && Set.ofList j.On = wanted)
+                || (j.Left = right
+                    && j.Right = left
+                    && Set.ofList (j.On |> List.map (fun (a, c) -> c, a)) = wanted))
+        | _ -> false
+
+    /// The relations the model declares between the tables brought in so far and `right` (a table
+    /// id), as the pairs a pipeline would write: what an `UnrelatedJoin` names.
+    let private offered (root: ModelNode) (walk: Walk) (right: string) : string list =
+        Model.joins root
+        |> List.choose (fun (_, j) -> walk.Tables |> List.tryPick (fun left -> oriented root left right j))
+        |> List.map (fun pairs -> pairs |> List.map (fun (a, b) -> a + " = " + b) |> String.concat ", ")
+
+    /// The id of the column a table names `name`.
+    let private columnId (table: ModelNode) (name: string) : string option =
+        Model.columns table
+        |> List.tryFind (fun (_, spec) -> spec.Name = name)
+        |> Option.map (fun (c, _) -> c.Id)
+
+    /// The join's left keys resolved through the walk's lineage, or the first that carries no model
+    /// column, refused naming what it resolved to.
+    let private resolveLeft
+        (step: int)
+        (table: string)
+        (walk: Walk)
+        (on: (string * string) list)
+        : Result<(string * string) list, PipelineRefusal> =
+        on
+        |> List.fold
+            (fun acc (l, _) ->
+                acc
+                |> Result.bind (fun found ->
+                    match Lineage.resolve walk.Lineage l with
+                    | Ok c -> Ok(found @ [ c ])
+                    | Error why -> Error(PipelineRefusal.UnresolvedJoinKey(step, table, l, why))))
+            (Ok [])
 
     let private membersAt (k: SchemaKnowledge) = SchemaWalk.names k
 
@@ -360,35 +520,38 @@ module PipelineCheck =
                                     let carried =
                                         Operand.provenance (Model.schemaOf node |> List.map _.Name) o.Pipeline
 
-                                    let candidates =
-                                        Model.joins root
-                                        |> List.choose (fun (_, j) ->
-                                            walk.Tables |> List.tryPick (fun left -> oriented root left node.Id j))
-
-                                    let wanted =
-                                        on
-                                        |> List.map (fun (l, r) -> Map.tryFind r carried |> Option.map (fun c -> l, c))
+                                    // Each output name of the operand, resolved to its table's model
+                                    // column where it carries one unchanged.
+                                    let rightLineage =
+                                        members
+                                        |> List.map (fun n ->
+                                            n,
+                                            match Map.tryFind n carried |> Option.bind (columnId node) with
+                                            | Some c -> Ok(node.Id, c)
+                                            | None ->
+                                                Error(sprintf "is computed inside the grouped operand '%s'" o.Name))
 
                                     let declared =
-                                        wanted |> List.forall Option.isSome
-                                        && candidates
-                                           |> List.exists (fun pairs ->
-                                               Set.ofList pairs = Set.ofList (List.choose id wanted))
+                                        resolveLeft step o.Name walk on
+                                        |> Result.map (fun lefts ->
+                                            let rights =
+                                                on
+                                                |> List.map (fun (_, r) ->
+                                                    Map.tryFind r carried |> Option.bind (columnId node))
 
-                                    if not declared then
+                                            rights |> List.forall Option.isSome
+                                            && declaredOn
+                                                root
+                                                node.Id
+                                                (List.zip lefts (rights |> List.map Option.get)))
+
+                                    match declared with
+                                    | Error refusal -> Error refusal
+                                    | Ok false ->
                                         Error(
-                                            PipelineRefusal.UnrelatedJoin(
-                                                step,
-                                                o.Name,
-                                                on,
-                                                candidates
-                                                |> List.map (fun pairs ->
-                                                    pairs
-                                                    |> List.map (fun (a, b) -> a + " = " + b)
-                                                    |> String.concat ", ")
-                                            )
+                                            PipelineRefusal.UnrelatedJoin(step, o.Name, on, offered root walk node.Id)
                                         )
-                                    else
+                                    | Ok true ->
                                         match
                                             on
                                             |> List.tryPick (fun (l, r) ->
@@ -408,7 +571,14 @@ module PipelineCheck =
 
                                             Ok
                                                 { walk with
-                                                    Knowledge = SchemaWalk.ofTransform joined walk.Knowledge t })
+                                                    Knowledge = SchemaWalk.ofTransform joined walk.Knowledge t
+                                                    Lineage =
+                                                        Lineage.step
+                                                            step
+                                                            (SchemaWalk.names walk.Knowledge)
+                                                            rightLineage
+                                                            walk.Lineage
+                                                            t })
         | _ -> misused "only a join may bring in"
 
     let private checkStep
@@ -441,22 +611,24 @@ module PipelineCheck =
                         match on |> List.tryFind (fun (_, r) -> not (List.contains r rightMembers)) with
                         | Some(_, r) -> Error(PipelineRefusal.UnknownColumn(step, r, rightMembers))
                         | None ->
-                            let wanted = on |> Set.ofList
+                            // Each left key is followed to the model column it came from (DECISIONS.md
+                            // D19); the right keys name the joined table's own columns.
+                            // Every right key is a member of the joined table, checked above.
+                            let rights = on |> List.map (snd >> columnId rightNode >> Option.get)
 
-                            let candidates =
-                                Model.joins root
-                                |> List.choose (fun (_, j) ->
-                                    walk.Tables |> List.tryPick (fun left -> oriented root left rightNode.Id j))
-
-                            if candidates |> List.exists (fun pairs -> Set.ofList pairs = wanted) then
-                                Ok()
-                            else
-                                let described =
-                                    candidates
-                                    |> List.map (fun pairs ->
-                                        pairs |> List.map (fun (a, b) -> a + " = " + b) |> String.concat ", ")
-
-                                Error(PipelineRefusal.UnrelatedJoin(step, rightSpec.Name, on, described))
+                            resolveLeft step rightSpec.Name walk on
+                            |> Result.bind (fun lefts ->
+                                if declaredOn root rightNode.Id (List.zip lefts rights) then
+                                    Ok()
+                                else
+                                    Error(
+                                        PipelineRefusal.UnrelatedJoin(
+                                            step,
+                                            rightSpec.Name,
+                                            on,
+                                            offered root walk rightNode.Id
+                                        )
+                                    ))
                     // A prediction's model source must carry every column the prediction reads from it.
                     | Predict spec, Some(modelNode, _) ->
                         let modelMembers = Model.schemaOf modelNode |> List.map _.Name
@@ -475,7 +647,13 @@ module PipelineCheck =
                     | Some r -> Error r
                     | None -> Ok())
                 |> Result.map (fun () ->
+                    let right =
+                        match t, operand with
+                        | Join _, Some(n, _) -> Lineage.ofTable n
+                        | _ -> []
+
                     { Knowledge = SchemaWalk.ofTransform sources walk.Knowledge t
+                      Lineage = Lineage.step step (SchemaWalk.names walk.Knowledge) right walk.Lineage t
                       Tables =
                         match operand with
                         | Some(n, _) when not (List.contains n.Id walk.Tables) -> walk.Tables @ [ n.Id ]
@@ -508,7 +686,8 @@ module PipelineCheck =
         |> Result.bind (fun (n, _) ->
             let start =
                 { Knowledge = SchemaWalk.ofSource sources source
-                  Tables = [ n.Id ] }
+                  Tables = [ n.Id ]
+                  Lineage = Lineage.start n }
 
             pipeline
             |> List.mapi (fun i t -> i + 1, t)

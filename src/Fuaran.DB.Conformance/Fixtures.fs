@@ -852,5 +852,42 @@ module Fixtures =
               "orders"
               [ GroupBy([], [ agg "channels" CountDistinct "channel" ]) ] ]
 
+    /// Joins whose LEFT side is a grouping that keeps the relation's key, or whose key a projection
+    /// renamed (DECISIONS.md D19): each statement joins a derived table. The seed's `orders.cust` holds a
+    /// null and repeats a customer, so the grouping meets null keys and duplicate keys before the join.
+    let staged: Fixture list =
+        [ fixture
+              "join-after-grouping-left"
+              "orders grouped on the customer key, then left-joined to the customers: one row per key, the null key's group kept with nulls"
+              "orders"
+              [ GroupBy([ "cust" ], [ agg "spend" Sum "amount"; agg "orders" Count "id" ])
+                Join(Ref "customers", [ "cust", "id" ], Left) ]
+          fixture
+              "join-after-grouping-inner"
+              "orders grouped on the customer key and a channel, then inner-joined to the customers: a key repeated across groups meets its customer in each"
+              "orders"
+              [ GroupBy([ "cust"; "channel" ], [ agg "orders" Count "id" ])
+                Join(Ref "customers", [ "cust", "id" ], Inner) ]
+          fixture
+              "join-after-grouping-anti"
+              "orders grouped on the customer key, keeping the groups no customer matches: the null key's group among them"
+              "orders"
+              [ GroupBy([ "cust" ], [ agg "orders" Count "id" ])
+                Join(Ref "customers", [ "cust", "id" ], Anti) ]
+          fixture
+              "join-after-rename"
+              "orders with the customer key renamed, then left-joined to the customers on the renamed key"
+              "orders"
+              [ Project [ "id", "order_ref"; "cust", "buyer"; "amount", "amount" ]
+                Join(Ref "customers", [ "buyer", "id" ], Left) ]
+          fixture
+              "join-after-grouping-rollup"
+              "orders grouped on the customer key, joined to the customers, then re-aggregated by tier with a sum and a distinct count"
+              "orders"
+              [ GroupBy([ "cust" ], [ agg "spend" Sum "amount" ])
+                Join(Ref "customers", [ "cust", "id" ], Left)
+                GroupBy([ "tier" ], [ agg "total" Sum "spend"; agg "buyers" CountDistinct "cust" ]) ] ]
+
     /// Every fixture of the kit.
-    let all: Fixture list = subset @ differences @ refusals @ derives @ grouped @ counts
+    let all: Fixture list =
+        subset @ differences @ refusals @ derives @ grouped @ counts @ staged

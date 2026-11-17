@@ -202,9 +202,10 @@ let private describeEngine (conn: SqlConnection) : string * string =
     r.GetString 0, r.GetString 1
 
 /// The kit against the configured engine, in a database created for the run and dropped after it.
-let runAgainstServer (dialect: Dialect) (connectionString: string) : Report * string * string =
-    let database =
-        "fuaran_db_conformance_" + Guid.NewGuid().ToString("N").Substring(0, 12)
+/// `f` over a connection to a fresh database on the configured server, named from `prefix` and dropped
+/// afterwards.
+let private withDatabase (prefix: string) (connectionString: string) (f: SqlConnection -> 'a) : 'a =
+    let database = prefix + Guid.NewGuid().ToString("N").Substring(0, 12)
 
     use master = new SqlConnection(connectionString)
     master.Open()
@@ -216,11 +217,7 @@ let runAgainstServer (dialect: Dialect) (connectionString: string) : Report * st
         builder.Pooling <- false
         use conn = new SqlConnection(builder.ConnectionString)
         conn.Open()
-        let version, collation = describeEngine conn
-
-        match Kit.run dialect (sqlHost conn) with
-        | Ok report -> report, version, collation
-        | Error e -> failtestf "the seed could not be placed: %s" e
+        f conn
     finally
         SqlConnection.ClearAllPools()
 
@@ -231,6 +228,44 @@ let runAgainstServer (dialect: Dialect) (connectionString: string) : Report * st
              + " SET SINGLE_USER WITH ROLLBACK IMMEDIATE")
 
         nonQuery master ("DROP DATABASE " + SqlServer.quote database)
+
+let runAgainstServer (dialect: Dialect) (connectionString: string) : Report * string * string =
+    withDatabase "fuaran_db_conformance_" connectionString (fun conn ->
+        let version, collation = describeEngine conn
+
+        match Kit.run dialect (sqlHost conn) with
+        | Ok report -> report, version, collation
+        | Error e -> failtestf "the seed could not be placed: %s" e)
+
+/// The staged shapes over the configured server (DECISIONS.md D19): each admitted under the row-level
+/// grant, lowered through the dialect, run by the engine, its suffix finished, and compared with the
+/// reference. Answers each shape's name and whether it agreed, with both answers where it did not.
+let stagedAgainstServer (connectionString: string) : (string * Result<unit, string>) list =
+    withDatabase "fuaran_db_conformance_" connectionString (fun conn ->
+        let host = sqlHost conn
+
+        match host.Seed Sample.Staged.physical with
+        | Error e -> failtestf "the staged rows could not be placed: %s" e
+        | Ok() ->
+            let execute (s: Statement) =
+                host.Execute s
+                |> Result.mapError (function
+                    | HostFailure.Failed detail -> detail
+                    | HostFailure.Refused e -> sprintf "refused %A" e)
+
+            [ for name, pipeline in Sample.Staged.shapes ->
+                  name,
+                  match Sample.Staged.admit Sample.Staged.rowLevel pipeline with
+                  | Error r -> Error(Policy.describe r)
+                  | Ok admitted ->
+                      Sample.Staged.placed SqlServer.dialect execute admitted
+                      |> Result.bind (fun (_, answer) ->
+                          let expected = Sample.Staged.reference admitted
+
+                          if Kit.agrees true answer expected then
+                              Ok()
+                          else
+                              Error(sprintf "the engine answered %A; the reference %A" answer expected)) ])
 
 /// The engine type of column `at` in `table`, as the catalog reports it: `datetime2` with its fractional
 /// digits, any other type by its bare name.
@@ -266,19 +301,7 @@ let private timestampsByUnit =
 /// through the catalog, and an instant bound at the unit's full precision reads back whole; a `datetime`
 /// and a `smalldatetime` column, created with raw DDL, report and read back at milliseconds and seconds.
 let timestampRoundTrip (connectionString: string) =
-    let database = "fuaran_db_units_" + Guid.NewGuid().ToString("N").Substring(0, 12)
-
-    use master = new SqlConnection(connectionString)
-    master.Open()
-    nonQuery master ("CREATE DATABASE " + SqlServer.quote database)
-
-    try
-        let builder = SqlConnectionStringBuilder(connectionString)
-        builder.InitialCatalog <- database
-        builder.Pooling <- false
-        use conn = new SqlConnection(builder.ConnectionString)
-        conn.Open()
-
+    withDatabase "fuaran_db_units_" connectionString (fun conn ->
         for unit, text in timestampsByUnit do
             let ty = TimestampType unit
             let table = "at_" + ColumnType.tag ty
@@ -322,17 +345,7 @@ let timestampRoundTrip (connectionString: string) =
             Expect.equal
                 (bindAndRead conn table ty bound)
                 (Ok(Timestamp read))
-                (sprintf "%s reads %s back" engineType bound)
-    finally
-        SqlConnection.ClearAllPools()
-
-        nonQuery
-            master
-            ("ALTER DATABASE "
-             + SqlServer.quote database
-             + " SET SINGLE_USER WITH ROLLBACK IMMEDIATE")
-
-        nonQuery master ("DROP DATABASE " + SqlServer.quote database)
+                (sprintf "%s reads %s back" engineType bound))
 
 [<Tests>]
 let tests =
@@ -526,13 +539,13 @@ let tests =
                   | _ -> ()
 
           testCase
-              "the grouped-operand and count fixtures lower in full up to the bounding limit, the operand inside the join, in both dialects"
+              "the grouped-operand, count and staged fixtures lower in full up to the bounding limit, in both dialects"
           <| fun _ ->
               // Every pipeline ends in the bounding limit the policy requires, which no sort orders, so
               // the boundary falls there and nowhere earlier: the engine run is evidence about the join
               // and the count, not about a local suffix (DECISIONS.md D16).
               for dialect in [ SqlServer.dialect; PostgreSql.dialect ] do
-                  for f in Fixtures.grouped @ Fixtures.counts do
+                  for f in Fixtures.grouped @ Fixtures.counts @ Fixtures.staged do
                       match boundaryOf dialect f with
                       | Some(Refusal.OperandNotLowered(1, _, why)) when f.Id = "operand-grouped-wide" ->
                           Expect.stringContains why "could fan out" "the wide operand is named as such"
@@ -708,6 +721,18 @@ let tests =
                              u
 
                          Expect.equal u 0 "no fixture differs unexpectedly"
+
+                     testCase "the staged shapes against the configured SQL Server equal the reference"
+                     <| fun _ ->
+                         for name, verdict in stagedAgainstServer connectionString do
+                             printfn
+                                 "staged shape (sqlserver, engine): %s %s"
+                                 name
+                                 (match verdict with
+                                  | Ok() -> "agreed"
+                                  | Error why -> "DIFFERED: " + why)
+
+                             Expect.isOk verdict name
 
                      // The falsifier: a dialect that reads a bit as a condition is caught by the engine.
                      testCase "the kit goes red over the engine for a dialect that reads a bit as a condition"

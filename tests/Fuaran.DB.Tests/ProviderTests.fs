@@ -9,6 +9,7 @@ open Fuaran.Core
 open Fuaran.Compute
 open Fuaran.DB
 open Fuaran.DB.Provider
+open Fuaran.DB.Dialect
 
 let private seed = 19000
 let private iterations = 600
@@ -644,4 +645,139 @@ let tests =
                           || id.StartsWith "Fuaran.Compute."
                       ))
 
-              Expect.equal foreign [] "references outside the provider's boundary" ]
+              Expect.equal foreign [] "references outside the provider's boundary"
+
+          // ---- the staged shapes: the acceptance pack (DECISIONS.md D19) ----
+
+          testCase "the join-after-a-grouping law goes red over an engine whose join matches a null key (its falsifier)"
+          <| fun _ ->
+              // A grouping keeps the null key as one group, and a dimension row may hold a null key: an
+              // engine that matches the two is caught by the law over joins after a grouping.
+              let results =
+                  PlacementLaws.laws
+                      d
+                      (ReferenceDialect.executeAs
+                          { ReferenceDialect.right with
+                              NullKeysMatch = true })
+                      seed
+                      iterations
+
+              let law =
+                  results
+                  |> List.find (fun r -> r.Law.StartsWith "a join whose left side is a grouping on the relation's key")
+
+              Expect.isFalse law.Passed "a null key matched after a grouping is caught"
+
+          testCase "under the keyed grant, the staged shapes meet Phase 40's refusals, each by name"
+          <| fun _ ->
+              // The order stage keeps the orders of a known customer by testing the customer key, a
+              // predicate; and the line stage marks an order without lines by testing the line's order key,
+              // which carries the key into the columns it derives and then sorts by. Phase 40 refuses both
+              // under a keyed grant (DECISIONS.md D18.2, D19).
+              for name, pipeline in Sample.Staged.shapes do
+                  match Sample.Staged.admit Sample.Staged.subject pipeline with
+                  | Error(PolicyRefusal.KeyOnly(PolicySite.Step 1, c, usage)) ->
+                      Expect.equal (c.Table, c.Column) ("order_headers", "customer_key") (name + ": the column")
+                      Expect.stringContains usage "filter predicate" (name + ": the use")
+                  | other -> failtestf "%s: expected the key-only refusal at step 1, got %A" name other
+
+              let withoutKeyTest (pipeline: Transform list) =
+                  match pipeline with
+                  | Filter(Binary(And, kept, _)) :: rest -> Filter kept :: rest
+                  | _ -> failtest "the order stage opens with its filter"
+
+              for name, pipeline in Sample.Staged.shapes do
+                  match name, Sample.Staged.admit Sample.Staged.subject (withoutKeyTest pipeline) with
+                  | ("lines" | "new_shopper_products"), Error(PolicyRefusal.KeyOnly(_, c, usage)) ->
+                      Expect.equal (c.Table, c.Column) ("order_lines", "order_key") (name + ": the column")
+                      Expect.stringContains usage "sort key" (name + ": the use")
+                  | ("orders" | "shoppers" | "campaigns" | "quality"), Ok admitted ->
+                      match FoldSplit.explain admitted d Bindings.none with
+                      | Ok report when name = "quality" ->
+                          Expect.isSome report.Boundary "the unpivot's cast runs locally"
+                      | Ok report -> Expect.isNone report.Boundary (name + " lowers in full under the keyed grant")
+                      | Error r -> failtestf "%s: %s" name (Refusal.describe r)
+                  | _, other -> failtestf "%s: %A" name other
+
+          testCase
+              "under a row-level grant on the keys, five staged shapes lower in full in every dialect, and the sixth's prefix ends at its grain"
+          <| fun _ ->
+              for dialect in [ d; SqlServer.dialect; PostgreSql.dialect ] do
+                  for name, pipeline in Sample.Staged.shapes do
+                      match Sample.Staged.admit Sample.Staged.rowLevel pipeline with
+                      | Error r -> failtestf "%s: %s" name (Policy.describe r)
+                      | Ok admitted ->
+                          match FoldSplit.explain admitted dialect Bindings.none with
+                          | Error r -> failtestf "%s through %s: %s" name dialect.Name (Refusal.describe r)
+                          | Ok report ->
+                              let local = FoldSplit.suffix report
+
+                              if name = "quality" then
+                                  // The boundary is the first step after the returned grain, and the
+                                  // suffix neither groups nor joins: it reads rows already at that grain.
+                                  let lastGrouping =
+                                      report.Plan.Planned
+                                      |> List.findIndexBack (function
+                                          | GroupBy _ -> true
+                                          | _ -> false)
+
+                                  Expect.isSome report.Boundary "the sixth places its boundary"
+                                  Expect.isGreaterThan report.Lowered lastGrouping "the prefix ends at the grain"
+
+                                  Expect.isTrue
+                                      (report.Plan.Planned
+                                       |> List.skip (lastGrouping + 1)
+                                       |> List.take (report.Lowered - lastGrouping - 1)
+                                       |> List.forall (function
+                                           | Filter _
+                                           | Project _ -> true
+                                           | _ -> false))
+                                      "only the grouping's own filter and projection lower after it"
+
+                                  Expect.isFalse
+                                      (local
+                                       |> List.exists (function
+                                           | GroupBy _
+                                           | Join _ -> true
+                                           | _ -> false))
+                                      "the suffix neither groups nor joins"
+
+                                  Expect.isTrue
+                                      (local
+                                       |> List.exists (function
+                                           | Unpivot _ -> true
+                                           | _ -> false))
+                                      "the tail unpivot stays local"
+
+                                  let said = FoldSplit.describe report |> String.concat "\n"
+                                  Expect.stringContains said "the local suffix is steps" "explain names the suffix"
+                              else
+                                  Expect.isNone
+                                      report.Boundary
+                                      (sprintf "%s through %s lowers in full" name dialect.Name)
+
+                                  Expect.isEmpty local (name + ": an empty local suffix")
+
+          testCase "the staged shapes' placements equal the reference evaluator in every dialect"
+          <| fun _ ->
+              let execute (s: Statement) =
+                  ReferenceDialect.execute s Sample.Staged.physical
+                  |> Result.mapError (sprintf "%A")
+
+              for dialect in [ d; SqlServer.dialect; PostgreSql.dialect ] do
+                  for name, pipeline in Sample.Staged.shapes do
+                      match Sample.Staged.admit Sample.Staged.rowLevel pipeline with
+                      | Error r -> failtestf "%s: %s" name (Policy.describe r)
+                      | Ok admitted ->
+                          let expected = Sample.Staged.reference admitted
+
+                          match expected with
+                          | Ok t -> Expect.isGreaterThan (Table.rowCount t) 0 (name + ": the reference answers rows")
+                          | Error e -> failtestf "%s: the reference refused: %A" name e
+
+                          match Sample.Staged.placed dialect execute admitted with
+                          | Error why -> failtestf "%s through %s: %s" name dialect.Name why
+                          | Ok(_, answer) ->
+                              Expect.isTrue
+                                  (Fuaran.DB.Conformance.Kit.agrees true answer expected)
+                                  (sprintf "%s through %s: %A against %A" name dialect.Name answer expected) ]
