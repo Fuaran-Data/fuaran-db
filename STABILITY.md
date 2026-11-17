@@ -2,7 +2,7 @@
 
 **Status:** pre-release, on the `0.x` line. The package version is single-sourced from `<Version>` in
 `Directory.Build.props` (which `pack.ps1` reads). 0.1.0, 0.2.0 and 0.3.0 are tagged and published on nuget.org, so each
-names one contract and is never repacked. A version headed DRAFT below, when there is one, is untagged and pinned by
+names one contract and is never repacked. 0.4.0 is headed DRAFT below. A version headed DRAFT, when there is one, is untagged and pinned by
 no public consumer: it is a **draft slot**, which an additive change rides and a change of a higher class
 advances.
 
@@ -81,6 +81,38 @@ public feed, names one contract and is never repacked: a change after that point
   to the text a form renders to is classed with the form's own changes.
 
 ## Versions
+
+### 0.4.0 — DRAFT
+
+A keyed grant: a classified column keys a grouping or a join, and never reaches the result (Phase 40,
+DECISIONS.md D18). 0.3.0 is tagged, so the change cannot ride it, and a closed union gains a case, so on the `0.x`
+line it advances the minor. Built against the same line as 0.3.0, `Fuaran.Core.*` 0.42.0 and
+`Fuaran.Compute.DataFrame` 0.44.0. Untagged and unpublished: a draft slot.
+
+- **Breaking — `GrantLevel` gains `Keyed`**, between `Aggregate` and `RowLevel`. A closed union gaining a case
+  breaks every exhaustive match a consumer has written.
+- **Breaking — `PolicyRefusal` gains `KeyOnly`, `KeyInResult` and `KeyGrain`** (`DB-GRANT-KEY-ONLY`,
+  `DB-GRANT-KEY-IN-RESULT`, `DB-GRANT-KEY-GRAIN`), and `Policy.codes` lists them after `DB-GRANT-AGGREGATE-ONLY`;
+  read the codes by value, not by position.
+- **The posture, widened and decided (D18)**: a subject holding a classification at `Keyed` may use its columns as
+  a grouping key and a join key, in the pipeline and in a grouped operand, besides what `Aggregate` admits. Its
+  value never reaches the result, under any name or derivation, and neither does a row at its grain. A key's
+  `Min`, `Max` or `Median` is held as a key, so it no longer reaches the result where `Aggregate` lets it.
+  Nothing a subject holding `Aggregate` or `RowLevel` reads moves.
+- **`Policy.level` with both an aggregate and a keyed grant** over one classification answers `Keyed` (D18.6);
+  a row-level grant still governs both.
+- **The projection's drift (D18.6)**: a grant changed between `Aggregate` and `Keyed`, either way, is breaking, and
+  a change to `RowLevel` from either is not. `ModelProjection.Laws` draws keyed grants, and its monotone and drift
+  laws state the one exception, a keyed grant governing an aggregate one, as a checked property; two shapes and a
+  verdict are added to its sample adequacy. Read laws by name, not by position.
+- **Additive — `Policy.levelTag`, `Policy.levelTags` and `Policy.tryLevel`**: a level's wire tag, every tag, and
+  the level a tag names. The session wire and the projection wire read and write levels through them.
+- **The wires, extended (D18.7)**: a level is written `"keyed"` beside `"aggregate"` and `"row"`, which keep their
+  spelling and meaning, so a 0.3.0 stream and a 0.3.0 projection read unchanged and every existing vector keeps its
+  bytes. A 0.3.0 reader refuses the new tag by name (`UnknownKind` at the level's path); a test pins the refusal as
+  the 0.3.0 package answered it. `wire-fixtures/projections/accept/retail-personal-keyed.json` and
+  `wire-fixtures/session/streams/keyed.jsonl` are added.
+- **The conformance set**: every emitted file is re-stamped with the kit version, 0.4.0. No fixture content moves.
 
 ### 0.3.0
 
