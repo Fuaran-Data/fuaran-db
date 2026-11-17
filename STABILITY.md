@@ -1,8 +1,8 @@
 # Fuaran.DB — API stability
 
 **Status:** pre-release, on the `0.x` line. The package version is single-sourced from `<Version>` in
-`Directory.Build.props` (which `pack.ps1` reads). 0.1.0, 0.2.0 and 0.3.0 are tagged and published on nuget.org, so each
-names one contract and is never repacked. 0.4.0 is headed DRAFT below. A version headed DRAFT, when there is one, is untagged and pinned by
+`Directory.Build.props` (which `pack.ps1` reads). 0.1.0, 0.2.0, 0.3.0 and 0.4.0 are tagged and published on nuget.org, so each
+names one contract and is never repacked. A version headed DRAFT below, when there is one, is untagged and pinned by
 no public consumer: it is a **draft slot**, which an additive change rides and a change of a higher class
 advances.
 
@@ -82,12 +82,12 @@ public feed, names one contract and is never repacked: a change after that point
 
 ## Versions
 
-### 0.4.0 — DRAFT
+### 0.4.0
 
 A keyed grant: a classified column keys a grouping or a join, and never reaches the result (Phase 40,
 DECISIONS.md D18). 0.3.0 is tagged, so the change cannot ride it, and a closed union gains a case, so on the `0.x`
 line it advances the minor. Built against the same line as 0.3.0, `Fuaran.Core.*` 0.42.0 and
-`Fuaran.Compute.DataFrame` 0.44.0. Untagged and unpublished: a draft slot.
+`Fuaran.Compute.DataFrame` 0.44.0. Tagged `v0.4.0` and published on nuget.org.
 
 - **Breaking — `GrantLevel` gains `Keyed`**, between `Aggregate` and `RowLevel`. A closed union gaining a case
   breaks every exhaustive match a consumer has written.
