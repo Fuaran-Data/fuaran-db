@@ -155,6 +155,26 @@ draft: no public member is added or removed and no wire moves, so its class is a
   conditional copies of a key can now be reached under `Keyed`, and drops each group where any copy has no member
   (D20.6).
 
+The group floor drops a group for too few contributors, not for none (Phase 43, DECISIONS.md D21). It rides this
+draft: no public member is added or removed and no wire vector moves. What moves is what a floored grouping answers,
+for a consumer pinned to 0.3.0 as much as for one on this draft.
+
+- **Breaking in behaviour — a floored grouping returns more groups (D21, amending D5.5 and D18.5).** A group is
+  dropped when some counted input has at least one contributor and fewer than the floor. A count of zero no longer
+  drops it, provided some other counted input is at or above the floor; at a floor of 1 the floor drops nothing. What
+  a 0.3.0 consumer sees: at a floor of 1, a group in which an aggregated classified column has no value, which 0.3.0
+  dropped, is returned; above a floor of 1, a grouping that aggregates several classified inputs returns a group in
+  which one has no contributor and another has at least the floor's. A grouping with one counted input above a floor
+  of 1 answers exactly as before, and so does every refusal. Totals summed over the returned groups can therefore
+  change; a consumer comparing figures with a 0.3.0 run should expect the added groups and nothing else.
+- **What a kept group's aggregates answer over no contributor**: `Count` and `CountDistinct` 0; `Sum`, `Mean`, `Min`
+  and `Max` null. The reference evaluator and both dialects agree, and a test pins it.
+- **The recorded rewrite**: `GroupFloorApplied` keeps its shape. The admitted pipeline the session records carries
+  the filter as applied, which for one counted input above a floor of 1 is the same comparison as before; for several
+  it is a conjunction using `or` and `eq`, which the wire already encodes. No corpus vector's bytes move.
+- **Under the keyed grant** each of the first consumer's six staged pipeline shapes now answers exactly what it
+  answers under the row-level grant; the roll-up D20.6 found emptied returns its rows.
+
 ### 0.3.0
 
 A recording session admits and records a request's grouped operands (Phase 36, DECISIONS.md D17). 0.2.0 is

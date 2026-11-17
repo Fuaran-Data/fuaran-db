@@ -1,5 +1,96 @@
 # Fuaran.DB — decisions (newest first)
 
+## 2026-11-17 — D21: the group floor drops a group for too few contributors, not for none (Phase 43)
+
+The floor (D5.5, kept by D18.5) kept a group only when every counted input had at least the model's floor of
+contributors. That dropped a group whose count for one input was zero, at any floor, the floor of 1 included. D20.6
+found the first consumer's shoppers roll-up emptied by it under the keyed grant: one grouping counts the customer key
+four times, three of them as copies chosen by a condition, and a group with no new shopper, or none returning, has a
+count of zero for that copy. A floor cannot be declared as zero, and an undeclared floor is refused, so a model had no
+way to say "no minimum". Eight rulings; D5.5 and D18.5 are amended in place, and D20.6's reopen clause is closed.
+
+1. **The rule.** A group is dropped when some counted input has at least one contributor and fewer than the floor.
+   An input with no contributor does not drop it, with one condition above a floor of 1 (ruling 2): some counted
+   input has at least the floor's contributors. At a floor of 1 the floor drops nothing, which is what "no minimum
+   group size" means. With one counted input, above a floor of 1, the rule is the comparison it always was, a count
+   at or above the floor; with several it is a conjunction: each count none or at the floor, and some count at the
+   floor. **The argument.** A count of zero says that no row of the group holds a value for the input. It names no
+   value and no contributor: there is no one in that answer to be fewer than the floor. What it does say is a fact
+   about each of the group's rows, that the input is absent from it, and a fact about every row of a group is a fact
+   about that many contributors. So a zero is as safe as the group is large, and the floor needs the group shown to
+   be at least the floor's size. A contributor is a present cell, one per row, so an input counted at the floor
+   shows that many rows, and a zero beside it says one thing about each of them: the kind of answer a count at the
+   floor already gives (that every one of its rows holds the input), which D5.5 admits.
+
+2. **Why the rule as filed is narrowed: a zero over fewer rows than the floor is about them.** The phase was filed
+   with "an input with no contributor does not drop the group", unconditionally. Checked at a floor above 1, that
+   keeps a group of one row whose only counted input is zero. A copy of a classified column chosen by a condition on
+   its own value is admitted (a `Derive` carries what it reads, a use refused at no level), and its count is floored.
+   Under `Keyed`, a grouping on row-level columns counting `Case(key = 'x', key)` would keep a one-row group whose
+   count is zero, telling the reader that the row's key is not `'x'`: an answer about one contributor, below the
+   floor. Under `Aggregate` the plainest case does it: `Count(salary)` is zero exactly when the one row's salary is
+   absent, and under `Aggregate` a presence is the column's row value (D20.3). The floor used to drop both groups, and
+   with the condition of ruling 1 it still does: no count in either is at the floor. **What the condition costs.** A
+   group of the floor's rows or more in which every counted input is zero is dropped, because no count shows how
+   many rows it has. The algebra has no row count (D16.6: every aggregate names a column, and `Count` counts its
+   present cells), so showing it would add a counted constant to every floored grouping, for a group that answers
+   nothing but zeros and nulls. Recorded, not built.
+
+3. **The alternatives D20.6 named, and why neither was taken.**
+   - **Counting the group's rows instead of each input's members.** Weaker, not stronger: a group of the floor's
+     rows with one contributor to an input passes, and a `Sum` or a pick of that input is that contributor's value.
+     The count per input stays the floor; the group's size enters only as ruling 1's condition on a zero, read off
+     the counts the floor already takes.
+   - **Withholding one aggregate below the floor instead of its group.** At floors above 1 it is the more useful
+     rule: a group keeps its other answers. It is not built, because the simpler rule is defensible and because it
+     costs three things. Every aggregate over a floored input becomes a `Case` on its count, so a result column that
+     was never null may be, and a withheld answer reads the same as an aggregate over no contributor unless a flag is
+     returned beside it. Each dialect lowers a different rewrite, and the recorded rewrite grows with it. And it
+     widens differencing: a group returning its total beside all but one of its parts returns the withheld part by
+     subtraction, so withholding needs its own complement rule before it holds. It stays a candidate for a consumer
+     that wants it at a floor above 1, with that argument answered first.
+
+4. **A finding outside this phase: the floor counts each input, never the difference of two.** A grouping counting
+   a key and a copy of it chosen by a condition, at 5 and 4 under a floor of 3, is kept before this phase and after
+   it, and tells the reader that one row fails the condition; summing a classified amount and the same copy of it
+   gives that one row's amount by subtraction. It holds at 0.3.0 under `Aggregate`, and under `Keyed` since D18. This
+   phase does not introduce it, and the zero ruling 1 admits does not widen it: beside a count at the floor, the
+   difference with a zero is that count. *Reopen* D5.5 with a complement rule (each conditionally chosen copy's
+   complement in its group, counted, also none or at the floor) if a grant must hold against a subject who writes
+   its own pipelines, which is the subject the floor is for.
+
+5. **What an aggregate answers over no contributor.** A kept group can now carry aggregates over an input no row
+   holds. `Count` and `CountDistinct` answer 0; `Sum`, `Mean`, `Min` and `Max` answer null, the absence of an
+   answer, never 0. The reference evaluator answers so, and both shipped dialects answer the same; a probe pipeline
+   over the staged rows pins it in the reference and every dialect at floors of 1 and 2, and runs on each engine
+   where its leg is armed. Under `Keyed` a key's pick over no contributor is null, held as a key as D18.4 holds any
+   pick.
+
+6. **The recorded rule and the wires.** `GroupFloorApplied(step, floor, columns)` keeps its shape and its spelling:
+   it records that the floor was applied, at which floor and over which columns, and the rule applied is this one.
+   The session records the rewritten pipeline, which carries the filter as applied. With one counted input above a
+   floor of 1 that is the same comparison as before, so no vector in the corpus moves (`keyed.jsonl` counts one input
+   at a floor of 2, and keeps its bytes); with several it is the conjunction, written with the `or` and `eq` the wire
+   already carries. A session test pins a two-input floor recorded, round-tripped and run.
+
+7. **The proof on the staged shapes.** Under the keyed grant each of the six answers exactly the rows it answers
+   under the row-level grant, in the reference evaluator and on each engine where its leg is armed, and each answers
+   rows. The test that pinned the shoppers roll-up's empty answer now pins the equality. Seen red: with the floor of
+   0.4.0 before this phase, three tests fail, the equality among them.
+
+8. **The surface.** No public member is added or removed. Behaviour moves for an existing consumer, so the change
+   is breaking in what it answers: at a floor of 1, a grouping keeps a group in which a counted input is zero (0.3.0
+   dropped it); above it, a grouping with several counted inputs keeps a group in which one is zero and another is
+   at the floor. A pipeline that returned fewer groups returns more. A grouping with one counted input above a floor
+   of 1 answers as before, and so does every refusal.
+
+**The evidence.** SQL Server 2025 LocalDB 17.0.4025.3 (Express Edition, 64-bit), collation
+`SQL_Latin1_General_CP1_CI_AS`: the six staged shapes, admitted under the keyed grant, agreed with the reference, and
+so did the empty-input probe at floors of 1 and 2; the kit's 112 fixtures, 110 agreed and 2 differing as pinned, 0
+differing unexpectedly. PostgreSQL 18.7 (Debian 18.7-1.pgdg13+2, 64-bit) in a local container, database collation
+`en_US.utf8`: the six shapes and the probe at both floors agreed; 112 fixtures, 111 agreed, 1 differing as pinned, 0
+differing unexpectedly, and over the ICU root locale 111, 1 and 0. No conformance database survived either run.
+
 ## 2026-11-17 — D20: a keyed column's presence may be tested, and the test is not the key (Phase 42)
 
 D18.2 refused every row-wise use of a keyed column but a grouping key or a join key, a predicate included. Phase 41
@@ -68,6 +159,10 @@ rulings; D18.2 is amended in place, and D19.7's reopen clause is closed.
    conditional copies of a key in one grouping, under a keyed grant, loses each group where any copy has no member.
    *Reopen* D18.5 if such a roll-up is wanted with a floor, with an argument for counting the group's rows rather
    than each keyed input's members, or for withholding one aggregate below the floor rather than its group.
+   *Closed 2026-11-17 (D21, Phase 43):* reopened and decided. The floor drops a group for too few contributors to
+   an input, not for none, while some input shows the group at the floor's size; at a floor of 1 it drops nothing.
+   Neither alternative was taken (D21.3). The shoppers roll-up now answers under the keyed grant exactly what it
+   answers under the row-level grant.
 
 7. **The surface.** No public member is added or removed, and no wire moves: a refusal is narrowed. Pipelines that
    0.3.0 and Phase 40 refused under `Keyed` as `KeyOnly` or `KeyInResult` because they tested a key's presence are
@@ -237,7 +332,10 @@ cube, the second admits a statement returning the keys. This decision adds the l
    takes the floor rewrite exactly as one over an `Aggregate` column does: a `Count` per such input, a `Filter` at
    the model's floor, a `Project` back. An undeclared floor is still refused (`DB-GROUP-FLOOR-UNDECLARED`). A
    grouping keyed on the column and aggregating only row-level columns needs no floor, as before; the grain
-   ruling, not the floor, keeps its rows out of the result.
+   ruling, not the floor, keeps its rows out of the result. *Amended 2026-11-17 (D21, Phase 43):* the rewrite stands
+   and its filter changes, for this level and every other: a group is dropped when some counted input has at least
+   one contributor and fewer than the floor; a zero does not drop it while another input is at the floor; a floor of
+   1 drops nothing. Several conditional copies of a key counted in one grouping no longer empty it (D20.6).
 
 6. **The levels are not a chain, and a keyed grant governs an aggregate one.** Ruling 4 makes `Keyed` refuse a
    result `Aggregate` admits (a key's `Min`), and `Keyed` admits keys `Aggregate` refuses, so neither covers the
@@ -1468,6 +1566,11 @@ REWRITING (steps added to the pipeline, which a reader can inspect). Ten rulings
    no second floor. `Min` and `Max` over a group at the floor still answer one row's value; that is recorded, not
    prevented. *Reopen* with a model-declared rule naming the aggregates a classification admits. (D18.5: the
    floor holds unchanged for a column held at `Keyed`; D18.4: there a `Min` or `Max` answer is held as a key.)
+   *Amended 2026-11-17 (D21, Phase 43):* keeping groups "at or above the model's floor" dropped a group whose count
+   for an input was zero, an answer about no one, and did so at any floor, so a model could not say "no minimum".
+   The `Filter` now drops a group when some count is at least 1 and below the floor; a zero passes while another
+   count is at or above the floor, which shows the group has that many rows, and at a floor of 1 every count passes.
+   With one counted input above a floor of 1 the comparison is unchanged.
 6. **A row policy is a model predicate over the subject's attributes.** A policy's `Param`s name subject
    attributes and are substituted as values before the policy is applied, so a request's bindings never reach
    it; an attribute the subject lacks is refused, naming it (`DB-ROW-POLICY-ATTRIBUTE`). The source's policies

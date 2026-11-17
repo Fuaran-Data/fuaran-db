@@ -34,7 +34,8 @@ check of a pipeline against a model (which follows each join key through renames
 keep it to the model column it came from, and matches the declared relation on model columns), seeding and drift
 against a reported schema, a canonical wire codec with its conformance corpus in [`wire-fixtures/`](wire-fixtures/), and an AI-tools surface. It also holds the
 policy: for a subject the host supplies, column grants, row policies, cost limits and a minimum group size
-decide on the tree whether a pipeline is admitted, refusing by name or rewriting visibly. A grant reads a
+(which drops a group for too few contributors to a classified aggregate input, never for none) decide on the
+tree whether a pipeline is admitted, refusing by name or rewriting visibly. A grant reads a
 classification in aggregate only, as a key (a grouping or join key whose value and grain never reach the
 result, and whose presence alone a filter or a condition may test), or row by row. For a peer that
 holds no credential, the model projects per subject to the part its grants may read, with no physical
