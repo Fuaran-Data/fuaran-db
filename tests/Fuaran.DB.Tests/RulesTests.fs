@@ -19,6 +19,44 @@ let tests =
         [ testCase "the worked model is clean"
           <| fun _ -> Expect.isEmpty (ModelRules.check model) "no defects"
 
+          testCase
+              "the registry builds through Core's constructors, and each family runs alone over the sample model as it runs in the registry"
+          <| fun _ ->
+              // Core 0.45.0 made `RuleFamily` opaque; a family built as a record failed the type
+              // initialiser of `ModelRules` at run time, before any rule ran.
+              let families = ModelRules.registry.Families
+
+              Expect.equal
+                  (families |> List.map _.Id)
+                  [ "containment"; "model"; "tables"; "joins"; "measures"; "sources" ]
+                  "the families, in registration order"
+
+              let alone (root: ModelNode) =
+                  families
+                  |> List.collect (fun f -> Validator.runAll ModelNode.witness { Families = [ f ] } root)
+
+              let dangling =
+                  model
+                  |> replace "j:orders-lines" (fun n ->
+                      match n.Kind with
+                      | NodeKind.Join j ->
+                          { n with
+                              Kind = NodeKind.Join { j with Right = "t:returns" } }
+                      | _ -> n)
+
+              let stray =
+                  { model with
+                      Children = model.Children @ [ col "c:stray" "stray" IntType "public" ] }
+
+              for label, root in
+                  [ "the worked model", model
+                    "a dangling join", dangling
+                    "a stray column", stray ] do
+                  Expect.equal (alone root) (ModelRules.check root) (sprintf "%s: each family alone, in order" label)
+
+              Expect.isEmpty (alone model) "every family is clean on the worked model"
+              Expect.isNonEmpty (alone dangling) "a family reports the dangling join"
+
           testCase "a join between tables the model does not hold is refused"
           <| fun _ ->
               model

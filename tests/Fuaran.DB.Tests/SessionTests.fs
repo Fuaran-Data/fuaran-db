@@ -415,6 +415,37 @@ let keyedStream () : Session =
 
     s'
 
+/// The two steps this release does not admit (DECISIONS.md D22), each seeded, by their wire tags.
+let refusedSteps: (string * Transform) list =
+    [ "kmeans", KMeans(KMeansSpec.create [ "amount", Col "amount" ] 2 7L)
+      "bootstrap",
+      Bootstrap(
+          BootstrapSpec.create
+              [ { Name = "spend"
+                  Fn = Mean
+                  Of = "amount" } ]
+              20
+              7L
+      ) ]
+
+/// A session whose one request carries `step`: refused by name before anything lowers (D22), so the
+/// record holds the pipeline as received and the refusal's code, and nothing after it.
+let refusedStepStream (kind: string) (step: Transform) : Session =
+    let now = clock ()
+
+    let s0 =
+        Session.start actor model ReferenceDialect.dialect "1.0" ("session-" + kind) "a-secret-the-host-keeps" (now ())
+        |> ok "start"
+
+    let s1, verdict =
+        s0
+        |> Session.request "q1" analyst "orders" [ step; Limit(Slot.Lit 100, Slot.Lit 0) ] (now ())
+        |> ok "request"
+
+    match verdict with
+    | Error(PolicyRefusal.Pipeline(PipelineRefusal.StepNotAdmitted(1, k))) when k = kind -> s1
+    | other -> failtestf "%s: expected the step refused by name, got %A" kind other
+
 /// The keyed join re-aggregated to one row, counting the key and a copy of it no row holds: the floor
 /// counts both, and the copy's count is zero (DECISIONS.md D21).
 let keyedNone: Transform list =
@@ -443,7 +474,21 @@ let private hmac (key: string) : Signer =
 let tests =
     testList
         "connection record"
-        [ testCase "Core's stream, reducer and capture-replay laws hold at the session witness"
+        [ testCase
+              "a request carrying a kmeans or a bootstrap step is recorded as received, then refused by its code (D22)"
+          <| fun _ ->
+              for kind, step in refusedSteps do
+                  match opsOf (refusedStepStream kind step) with
+                  | [ SessionOp.Opened _; SessionOp.Received("q1", "orders", [ received; _ ], _, [], _); refusal ] ->
+                      Expect.equal received step (sprintf "the %s step as received" kind)
+
+                      Expect.equal
+                          refusal
+                          (SessionOp.Refused("q1", "analyst", "DB-PIPELINE"))
+                          "refused, nothing lowered"
+                  | other -> failtestf "%s: %A" kind other
+
+          testCase "Core's stream, reducer and capture-replay laws hold at the session witness"
           <| fun _ ->
               let laws = StreamLaws.laws seed iterations
               printfn "census (session): %d laws, %d held" laws.Length (laws |> List.filter _.Passed |> List.length)
@@ -1462,6 +1507,8 @@ let corpusStreams () : (string * string) list =
       "measured", Export.wire (measured ()).Records
       "operand", Export.wire (operandStream ()).Records
       "keyed", Export.wire (keyedStream ()).Records ]
+    @ (refusedSteps
+       |> List.map (fun (kind, step) -> "refused-" + kind, Export.wire (refusedStepStream kind step).Records))
 
 /// The measured session's `ran` op: a statement record whose result columns carry their fields.
 let corpusMeasuredRan () : string =

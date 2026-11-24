@@ -288,4 +288,53 @@ let tests =
 
               match PipelineCheck.checkWith Staged.model Staged.operands (Ref "order_headers") pipeline with
               | Error(PipelineRefusal.UnknownTable(_, "line_checks", _)) -> ()
-              | other -> failtestf "expected UnknownTable, got %A" other ]
+              | other -> failtestf "expected UnknownTable, got %A" other
+
+          testCase "a kmeans step and a bootstrap step are each refused by name, before anything is walked (D22)"
+          <| fun _ ->
+              let kmeans = KMeans(KMeansSpec.create [ "revenue", Col "revenue" ] 2 7L)
+
+              let bootstrap =
+                  Bootstrap(
+                      BootstrapSpec.create
+                          [ { Name = "rev"
+                              Fn = Sum
+                              Of = "revenue" } ]
+                          20
+                          7L
+                  )
+
+              // a step the walk would refuse first, were the step kind not refused before the walk
+              let unknown = Filter(Binary(Gt, Col "no_such_column", Lit(Int 0)))
+
+              for kind, step in [ "kmeans", kmeans; "bootstrap", bootstrap ] do
+                  Expect.equal
+                      (refused (check (Ref "orders") [ step; Transform.limit 10 0 ]))
+                      (PipelineRefusal.StepNotAdmitted(1, kind))
+                      (sprintf "%s alone" kind)
+
+                  Expect.equal
+                      (refused (check (Ref "orders") [ unknown; step ]))
+                      (PipelineRefusal.StepNotAdmitted(2, kind))
+                      (sprintf "%s, ahead of an earlier step's refusal" kind)
+
+                  Expect.stringContains
+                      (PipelineCheck.describe (PipelineRefusal.StepNotAdmitted(2, kind)))
+                      (sprintf "step 2 is a '%s' step" kind)
+                      "the sentence names the step"
+
+                  let clustered =
+                      { Name = "clustered"
+                        Table = "orders"
+                        Pipeline = [ step ] }
+
+                  match
+                      PipelineCheck.checkWith
+                          model
+                          [ clustered ]
+                          (Ref "orders")
+                          [ Join(Ref "clustered", [ "order_id", "order_id" ], Inner) ]
+                  with
+                  | Error(PipelineRefusal.Operand("clustered", PipelineRefusal.StepNotAdmitted(1, k))) when k = kind ->
+                      ()
+                  | other -> failtestf "%s in a grouped operand: %A" kind other ]

@@ -580,7 +580,30 @@ let private keyedAdmit (subject: Subject) (steps: Transform list) =
 let tests =
     testList
         "policy"
-        [ testCase "default-deny: a subject with no grants lowers nothing, whatever the pipeline"
+        [ testCase "a kmeans step and a bootstrap step are refused by name before any rule reads them (D22)"
+          <| fun _ ->
+              // `salary` is aggregate-only for the analyst: were the step walked, a rule would refuse
+              // the column instead of the step.
+              let kmeans = KMeans(KMeansSpec.create [ "salary", Col "salary" ] 2 7L)
+
+              let bootstrap =
+                  Bootstrap(
+                      BootstrapSpec.create
+                          [ { Name = "pay"
+                              Fn = Mean
+                              Of = "salary" } ]
+                          20
+                          7L
+                  )
+
+              for kind, step in [ "kmeans", kmeans; "bootstrap", bootstrap ] do
+                  let r = refused analyst [ step; page 5 ]
+
+                  Expect.equal r (PolicyRefusal.Pipeline(PipelineRefusal.StepNotAdmitted(1, kind))) kind
+                  Expect.equal (Policy.code r) "DB-PIPELINE" "under the pipeline's code"
+                  Expect.stringContains (Policy.describe r) (sprintf "'%s'" kind) "the sentence names the step"
+
+          testCase "default-deny: a subject with no grants lowers nothing, whatever the pipeline"
           <| fun _ ->
               for label, pipeline in templates 5 @ [ "nothing at all", [] ] do
                   Expect.equal
