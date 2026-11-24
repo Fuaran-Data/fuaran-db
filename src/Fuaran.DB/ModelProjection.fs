@@ -3,6 +3,10 @@ namespace Fuaran.DB
 open Fuaran.Core
 open Fuaran.Compute
 
+// `Fuaran.DB.Grant` is written in full in this file: `open Fuaran.Core` brings Core's own `Grant`
+// (from `Fuaran.Core.Function`, since Core 0.43.0) into scope after this namespace's, and the later
+// open wins.
+
 // ============================================================================
 //  The model projected per peer (Phase 1907). In the custodian topology the
 //  provider, the model and the policy run on the far side of a peer call, and
@@ -29,7 +33,7 @@ type ProjectedModel =
         Model: ModelNode
         /// One grant per classification the projected model declares, at the subject's level, in the
         /// model's order.
-        Grants: Grant list
+        Grants: Fuaran.DB.Grant list
     }
 
 /// Why a pipeline is refused against a projection, at the requester, before it is sent.
@@ -135,7 +139,7 @@ module ModelProjection =
     /// measures whose column survives. Physical identifiers become model names; row policies, limits,
     /// fingerprints and the recording rule are dropped. Grants over nothing the model declares carry
     /// nothing. A subject with no grants projects to the empty model.
-    let project (model: ModelNode) (grants: Grant list) : ProjectedModel =
+    let project (model: ModelNode) (grants: Fuaran.DB.Grant list) : ProjectedModel =
         let spec =
             Model.spec model
             |> Option.defaultValue
@@ -306,7 +310,7 @@ module ModelProjection =
 
     open WireDecode
 
-    let private grantOf (path: string) (v: JVal) : Result<Grant, WireError> =
+    let private grantOf (path: string) (v: JVal) : Result<Fuaran.DB.Grant, WireError> =
         result {
             let! fs = fieldsOf path v
             do! only path [ "classification"; "level" ] fs
@@ -501,8 +505,8 @@ module ModelProjection =
         type Case =
             { Model: ModelNode
               Twin: ModelNode
-              Grants: Grant list
-              Wider: Grant list
+              Grants: Fuaran.DB.Grant list
+              Wider: Fuaran.DB.Grant list
               Source: DataSource
               Pipeline: Transform list }
 

@@ -478,9 +478,10 @@ module ModelRules =
             | NodeKind.RowPolicy _
             | NodeKind.Limit _ -> [])
 
+    /// A family of checks over the whole model, given its root: Core's whole-tree constructor, since
+    /// a `RuleFamily` is opaque from Core 0.45.0.
     let private family (id: string) (run: ModelNode -> Defect<string> list) : RuleFamily<ModelNode, string> =
-        { Id = id
-          Run = fun _ root -> run root }
+        Validator.wholeTree id (fun _ root -> run root)
 
     /// The registry: containment, then the domain's own families, in that order.
     let registry: Validator.RuleRegistry<ModelNode, string> =
