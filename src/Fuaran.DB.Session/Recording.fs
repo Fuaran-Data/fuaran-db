@@ -109,6 +109,11 @@ module Recording =
                         match spec.Model with
                         | PredictModel.Training s -> PredictModel.Training(redactSource count s)
                         | PredictModel.Coefficients s -> PredictModel.Coefficients(redactSource count s) }
+        // The policy refuses both by name (DECISIONS.md D22), but a refused request is still recorded.
+        // A clustering's features are redacted like a fit's terms; its count and seed stay, as a fit's
+        // control slots do. A resampling carries no expression: its aggregates name columns only.
+        | KMeans spec -> KMeans(KMeansSpec.mapExprs (redactExpr count) spec)
+        | Bootstrap _
         | Project _
         | GroupBy _
         | Window _

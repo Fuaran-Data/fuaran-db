@@ -671,7 +671,9 @@ module internal Lowering =
                 | Except _
                 | Define _
                 | Fit _
-                | Predict _ -> Error "a step after its last grouping can change how many rows a key holds"
+                | Predict _
+                | KMeans _
+                | Bootstrap _ -> Error "a step after its last grouping can change how many rows a key holds"
 
         back (List.rev planned) []
         |> Result.bind (fun (keys, after) ->
@@ -1000,5 +1002,9 @@ module internal Lowering =
                 | Define _ -> b, lowered, Some(Refusal.VerbNotLowered(step, "define"))
                 | Fit _ -> b, lowered, Some(Refusal.VerbNotLowered(step, "fit"))
                 | Predict _ -> b, lowered, Some(Refusal.VerbNotLowered(step, "predict"))
+                // The policy refuses both before a statement is built (DECISIONS.md D22); a dialect
+                // refuses each by name, never drops it.
+                | KMeans _ -> b, lowered, Some(Refusal.VerbNotLowered(step, "kmeans"))
+                | Bootstrap _ -> b, lowered, Some(Refusal.VerbNotLowered(step, "bootstrap"))
 
         go 1 start planned

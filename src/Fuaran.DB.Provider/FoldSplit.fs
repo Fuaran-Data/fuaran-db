@@ -253,6 +253,8 @@ module FoldSplit =
         | Define _ -> "define"
         | Fit _ -> "fit"
         | Predict _ -> "predict"
+        | KMeans _ -> "kmeans"
+        | Bootstrap _ -> "bootstrap"
 
     /// The split as sentences: what the planner rewrote, which steps lower, each derive and each grouped
     /// operand that lowered, where the boundary fell and why, and the local suffix it leaves.
