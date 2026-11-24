@@ -477,8 +477,10 @@ module PipelineCheck =
         | Limit _
         | Define _ -> None
         // Refused before its units are read (D22); were it reached, the refusal is the answer.
-        | KMeans _ -> Some(PipelineRefusal.StepNotAdmitted(step, "kmeans"))
-        | Bootstrap _ -> Some(PipelineRefusal.StepNotAdmitted(step, "bootstrap"))
+        | KMeans _
+        | Bootstrap _ ->
+            notAdmitted t
+            |> Option.map (fun kind -> PipelineRefusal.StepNotAdmitted(step, kind))
 
     /// The modelled table an operand names, or why it is refused.
     let private operandTable
