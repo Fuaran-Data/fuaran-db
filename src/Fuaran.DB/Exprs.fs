@@ -74,6 +74,11 @@ module Reads =
         // A prediction reads its keys and its terms from the rows reaching it; what it reads from its
         // model's source is `ofPredictModel`.
         | Predict spec -> Ok(spec.Fit.GroupBy @ (FitSpec.exprs spec.Fit |> List.collect ofExpr))
+        // A clustering reads its keys and every column its features read; a resampling its keys, its
+        // cluster column and every aggregate's input. Both are refused by name before any policy rule
+        // reads this (`PipelineRefusal.StepNotAdmitted`, DECISIONS.md D22); what they read is stated anyway.
+        | KMeans spec -> Ok(spec.GroupBy @ (KMeansSpec.exprs spec |> List.collect ofExpr))
+        | Bootstrap spec -> Ok(spec.GroupBy @ Option.toList spec.Cluster @ (spec.Aggregates |> List.map _.Of))
 
     /// What a prediction reads from its MODEL's source: from training rows, what a fit of its spec
     /// reads; from a coefficient table, the keys, `term` and `estimate` (no other column is read).
@@ -107,5 +112,7 @@ module Reads =
         | Sort _
         | Distinct
         | Limit _
+        | KMeans _
+        | Bootstrap _
         | Define _
         | Fit _ -> None

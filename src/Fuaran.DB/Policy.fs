@@ -739,6 +739,20 @@ module Policy =
 
             { flow with
                 Cols = appended |> List.fold (fun cols n -> upsert n read cols) flow.Cols }
+        // Refused by name before the policy walks it (`PipelineRefusal.StepNotAdmitted`, D22). Were it
+        // walked, the most restrictive lineage: every name, listed or not, carries every model column
+        // that reached the step as a row value, and the rows are keyed on all of them.
+        | KMeans _
+        | Bootstrap _ ->
+            let reached = everything flow |> List.fold join noLin
+
+            let all =
+                { noLin with
+                    Raw = reached.Raw + reached.Agg + reached.Tested }
+
+            { Cols = flow.Cols |> List.map (fun (n, _) -> n, all)
+              Rest = Some all
+              Keys = flow.Keys + all.Raw }
 
     // ---- how a step uses what it reads ----
 
@@ -819,6 +833,12 @@ module Policy =
             names (Expose "a prediction's input") (Reads.ofStep step |> Result.defaultValue [])
             @ (Reads.ofPredictModel spec
                |> List.map (fun c -> linOf other c, Expose "a prediction's model"))
+        // Refused by name before the policy walks it (D22); were it walked, every column reaching it is
+        // used row by row, the most restrictive use.
+        | KMeans _
+        | Bootstrap _ ->
+            everything flow
+            |> List.map (fun l -> l, Expose "the input of a step this release does not admit")
 
     /// How far `grants` reach a classification: row by row when any grant over it says so; as a key when
     /// one does and none says more; in aggregate when one does and none says more; and not at all when
@@ -942,7 +962,9 @@ module Policy =
                             | Except _
                             | Define _
                             | Fit _
-                            | Predict _ -> floors
+                            | Predict _
+                            | KMeans _
+                            | Bootstrap _ -> floors
 
                         advance mark model ops flow step, admitted, floors)))
             (Ok(start, [], Map.empty))
@@ -1012,6 +1034,10 @@ module Policy =
             | Anti -> false
         | Union _
         | Unpivot _ -> true
+        // Refused by name before the cost is read (D22); were it read, the most restrictive answer:
+        // the step may return more rows than reach it, so it may not follow the bounding `Limit`.
+        | KMeans _
+        | Bootstrap _ -> true
         // A coefficient table holds a row per group and term, which can outnumber the rows read.
         | Fit spec ->
             match spec.Output with
@@ -1050,6 +1076,9 @@ module Policy =
         // A fit, and a prediction from its training rows, group by the spec's keys.
         | Fit spec -> List.length spec.GroupBy
         | Predict spec -> List.length spec.Fit.GroupBy
+        // Refused by name before the cost is read (D22); each groups by its spec's keys.
+        | KMeans spec -> List.length spec.GroupBy
+        | Bootstrap spec -> List.length spec.GroupBy
         | Filter _
         | Project _
         | Derive _
@@ -1070,6 +1099,10 @@ module Policy =
         // A prediction pairs each row with its group's model, read from another table by key: a join
         // in all but name, and held to the same cap.
         | Predict _ -> true
+        // Refused by name before the cost is read (D22); were it read, the most restrictive answer: it
+        // counts against the join cap.
+        | KMeans _
+        | Bootstrap _ -> true
         | Filter _
         | Project _
         | Derive _
@@ -1263,6 +1296,10 @@ module Policy =
                             refuse "a set operation compares or adds the table's rows whole, before any filter"
                         | Predict _ ->
                             refuse "a prediction reads the table's rows whole as its model, before any filter"
+                        // Brings in no table, and is refused by name before this is asked (D22); were
+                        // it asked, the refusal is the most restrictive answer.
+                        | KMeans _
+                        | Bootstrap _ -> refuse "the step is one this release does not admit"
                         | Filter _
                         | Project _
                         | Derive _

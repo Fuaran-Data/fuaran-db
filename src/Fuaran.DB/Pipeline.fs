@@ -40,6 +40,10 @@ type PipelineRefusal =
     /// (DECISIONS.md D19): `resolved` says what the key resolved to — a derivation, an aggregate (a
     /// grouping that did not keep the column as a key), or a step after which no column carries one.
     | UnresolvedJoinKey of step: int * table: string * key: string * resolved: string
+    /// A step of a kind this release does not admit, named by its wire tag (`kmeans`, `bootstrap`):
+    /// no rule of the policy decides what it may read or return yet, so a pipeline carrying one is
+    /// refused before anything is walked, decided or lowered (DECISIONS.md D22).
+    | StepNotAdmitted of step: int * kind: string
 
 /// A grouped operand (DECISIONS.md D16): a named sub-pipeline over one modelled table, which a `Join`
 /// brings in as its right side by naming it, `Join(Ref name, on, kind)`. The transform algebra's
@@ -108,7 +112,9 @@ module Operand =
             | Pivot _
             | Unpivot _
             | Fit _
-            | Predict _ -> Map.empty
+            | Predict _
+            | KMeans _
+            | Bootstrap _ -> Map.empty
 
         pipeline |> List.fold step (columns |> List.map (fun c -> c, c) |> Map.ofList)
 
@@ -162,6 +168,32 @@ module PipelineCheck =
             sprintf "step %d sorts by param '%s', bound at run time; substitute it and check again" s p
         | PipelineRefusal.UnitMismatch(s, at, l, r) ->
             sprintf "step %d: unit mismatch in %s: %s against %s; convert one side explicitly" s at l r
+        | PipelineRefusal.StepNotAdmitted(s, kind) ->
+            sprintf "step %d is a '%s' step, which this release does not admit: no policy rule decides it yet" s kind
+
+    /// The wire tag of a step this release refuses by name (DECISIONS.md D22), or `None` for a step it
+    /// admits. A closed match with no catch-all, so a step the algebra gains stops this build.
+    let private notAdmitted (t: Transform) : string option =
+        match t with
+        | KMeans _ -> Some "kmeans"
+        | Bootstrap _ -> Some "bootstrap"
+        | Filter _
+        | Project _
+        | Derive _
+        | GroupBy _
+        | Join _
+        | Window _
+        | Pivot _
+        | Unpivot _
+        | Sort _
+        | Distinct
+        | Limit _
+        | Union _
+        | Intersect _
+        | Except _
+        | Define _
+        | Fit _
+        | Predict _ -> None
 
     /// A declared relation as the column-name pairs a pipeline would write, oriented so the
     /// joined (right) table is `right`. `None` when the relation does not involve `right` and
@@ -294,6 +326,11 @@ module PipelineCheck =
             | Predict _ ->
                 { Columns = Map.empty
                   Otherwise = sprintf "comes through the model step at step %d" step }
+            // Refused before the walk reaches it (D22); were it reached, no column would carry one.
+            | KMeans _
+            | Bootstrap _ ->
+                { Columns = Map.empty
+                  Otherwise = sprintf "comes through a step this release does not admit, at step %d" step }
 
     type private Walk =
         {
@@ -439,6 +476,9 @@ module PipelineCheck =
         | Distinct
         | Limit _
         | Define _ -> None
+        // Refused before its units are read (D22); were it reached, the refusal is the answer.
+        | KMeans _ -> Some(PipelineRefusal.StepNotAdmitted(step, "kmeans"))
+        | Bootstrap _ -> Some(PipelineRefusal.StepNotAdmitted(step, "bootstrap"))
 
     /// The modelled table an operand names, or why it is refused.
     let private operandTable
@@ -662,7 +702,8 @@ module PipelineCheck =
 
     /// Check `pipeline` over `source` against `model`, its joins bringing in `operands` by name
     /// (DECISIONS.md D16). `Ok` carries the walked output knowledge; `Error` the first refusal, in
-    /// step order. Nothing is lowered or evaluated.
+    /// step order, save that a step this release does not admit is refused before any other (D22).
+    /// Nothing is lowered or evaluated.
     let rec checkWith
         (model: ModelNode)
         (operands: Operand list)
@@ -682,20 +723,41 @@ module PipelineCheck =
             | Some o -> checkOperandStep model sources operands (checkWith model []) w (i, t) o
             | None -> checkStep model sources w (i, t)
 
-        operandTable model sourceStep source
-        |> Result.bind (fun (n, _) ->
-            let start =
-                { Knowledge = SchemaWalk.ofSource sources source
-                  Tables = [ n.Id ]
-                  Lineage = Lineage.start n }
+        // A step this release does not admit is refused by name before anything is walked, in the
+        // pipeline or in any grouped operand's (D22), so no other refusal can stand in front of it.
+        let firstNotAdmitted (steps: Transform list) =
+            steps
+            |> List.indexed
+            |> List.tryPick (fun (i, t) ->
+                notAdmitted t |> Option.map (fun k -> PipelineRefusal.StepNotAdmitted(i + 1, k)))
 
-            pipeline
-            |> List.mapi (fun i t -> i + 1, t)
-            |> List.fold (fun acc st -> acc |> Result.bind (fun w -> step w st)) (Ok start)
-            |> Result.map _.Knowledge)
+        let refusedStep =
+            firstNotAdmitted pipeline
+            |> Option.orElse (
+                operands
+                |> List.tryPick (fun o ->
+                    firstNotAdmitted o.Pipeline
+                    |> Option.map (fun r -> PipelineRefusal.Operand(o.Name, r)))
+            )
+
+        match refusedStep with
+        | Some r -> Error r
+        | None ->
+            operandTable model sourceStep source
+            |> Result.bind (fun (n, _) ->
+                let start =
+                    { Knowledge = SchemaWalk.ofSource sources source
+                      Tables = [ n.Id ]
+                      Lineage = Lineage.start n }
+
+                pipeline
+                |> List.mapi (fun i t -> i + 1, t)
+                |> List.fold (fun acc st -> acc |> Result.bind (fun w -> step w st)) (Ok start)
+                |> Result.map _.Knowledge)
 
     /// Check `pipeline` over `source` against `model`, with no grouped operand. `Ok` carries the walked
-    /// output knowledge; `Error` the first refusal, in step order. Nothing is lowered or evaluated.
+    /// output knowledge; `Error` the first refusal, in step order, save that a step this release does
+    /// not admit is refused before any other (D22). Nothing is lowered or evaluated.
     let check
         (model: ModelNode)
         (source: DataSource)
