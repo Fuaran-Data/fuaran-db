@@ -17,9 +17,9 @@
     <!-- One version property per producing repository (DECISIONS D14). Each names a version that is
          tagged and served by nuget.org, never a <Version> read from a clone: this repository restores
          from the public feed alone, and so does every consumer of its packages. The pair is the newest
-         published line; a consumer raises to it, so a module consuming them and this repository restores one Core and
-         one Compute. -->
-    <FuaranCoreVersion>0.42.0</FuaranCoreVersion>
-    <FuaranComputeVersion>0.44.0</FuaranComputeVersion>
+         published line, and Compute 0.46.0 is itself built on Core 0.45.0; a consumer raises to it, so a module
+         consuming them and this repository restores one Core and one Compute. -->
+    <FuaranCoreVersion>0.45.0</FuaranCoreVersion>
+    <FuaranComputeVersion>0.46.0</FuaranComputeVersion>
   </PropertyGroup>
 </Project>
