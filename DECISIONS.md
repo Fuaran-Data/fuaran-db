@@ -1,5 +1,50 @@
 # Fuaran.DB — decisions (newest first)
 
+## 2026-11-24 — D22: Fuaran.Core 0.45.0 and Fuaran.Compute 0.46.0, and kmeans and bootstrap steps refused by name (Phase 44)
+
+`Fuaran.Compute` 0.45.0 added two `Transform` cases, `KMeans` and `Bootstrap` (wire tags `kmeans` and `bootstrap`),
+each seeded from a pinned generator. Every exhaustive match over `Transform` here stopped compiling, which is what
+they are written closed for, and no rule of the policy says what either step may read or return. Six rulings.
+
+1. **The line.** `FuaranCoreVersion` moves from 0.42.0 to 0.45.0 and `FuaranComputeVersion` from 0.44.0 to 0.46.0,
+   the newest published pair; Compute 0.46.0 is itself built on Core 0.45.0, so a consumer restores one of each
+   (D14). The raise needed two repairs besides the steps, neither of which moves a contract: Core 0.45.0 makes
+   `RuleFamily` opaque, so the dataset model's five families are built with `Validator.wholeTree` (each runs over the
+   root, the whole-tree shape), their ids, order and defects unchanged; and Core 0.43.0 added a `Grant` of its own
+   in the `Fuaran.Core` namespace, which `open Fuaran.Core` puts in front of this namespace's in `ModelProjection.fs`,
+   so that file names `Fuaran.DB.Grant` in full. The public `Grant` is not renamed.
+2. **The refusal is a pipeline refusal: `PipelineRefusal.StepNotAdmitted(step, kind)`**, `kind` the step's wire tag.
+   Under the policy it is `PolicyRefusal.Pipeline`, code `DB-PIPELINE`; no new `DB-` code. No existing case fits:
+   each names something the model does or does not hold, and a step's kind is not a fact about the model. A new
+   `PolicyRefusal` case with a code of its own was considered and not taken. The pipeline check
+   (`validator:Fuaran.DB.PipelineAgainstModel`) cannot walk either step's lineage at this version either, and every
+   caller reaches it first: the policy, the projection's requester-side check and the session. Refusing there
+   refuses everywhere with one spelling, where a policy code would leave the validator answering for a step nothing
+   here decides, and would add a code that a consumer must learn and the phase that admits the steps would retire.
+3. **Before anything.** The check refuses such a step before it walks anything, in the pipeline or in any grouped
+   operand's (then as `Operand(name, StepNotAdmitted(i, kind))`, `i` counted within the operand), so no other
+   refusal stands in front of it: a pipeline carrying one is always refused by name. Nothing is lowered or
+   evaluated; the session records the request as received and the refusal's code, and nothing after it.
+4. **Every match over `Transform` names both cases, with no wildcard arm** (`Exprs.fs`, `Pipeline.fs`, `Policy.fs`,
+   the provider's `FoldSplit.fs` and `Lowering.fs`, the session's `Recording.fs`), so the next case the algebra
+   gains stops the build again. What each step reads is stated as it is (a clustering its keys and its features'
+   columns; a resampling its keys, its cluster column and its aggregates' inputs), and neither brings in a source.
+   Where a match must still answer for a refused step, it gives the most restrictive answer it has: no provenance
+   and no lineage through it; every column reaching it used row by row and carried as a row value, the rows keyed on
+   all of them; it may add rows (so it cannot follow the bounding `Limit`) and counts against the join cap; its
+   keys count against the grouping-key cap; a row policy cannot follow it; its unit check is the refusal itself. A
+   dialect refuses each by name (`VerbNotLowered`), never drops it. A refused request is still recorded, so the
+   recording redacts a clustering's features as it does a fit's terms, its count and seed staying as a fit's
+   control slots do; a resampling carries no expression.
+5. **Class: breaking.** `PipelineRefusal` is a closed union, so a case added to it breaks every exhaustive match a
+   consumer has written; the raised Core and Compute types in the public surface break it already. 0.4.0 is tagged,
+   so the change advances the minor to 0.5.0. The wire corpus gains a session stream per step: received as written,
+   then refused `DB-PIPELINE`. A reader of 0.4.0 refuses either stream at the step's tag, which its Compute does not
+   know.
+6. **What reopens it.** A ruling, per output table of each step, on what the policy's rules (grants at each level,
+   the group floor, row policies, the limits) say of it: then the refusal is narrowed to the outputs no rule
+   decides, or removed. Until then this release admits neither step.
+
 ## 2026-11-17 — D21: the group floor drops a group for too few contributors, not for none (Phase 43)
 
 The floor (D5.5, kept by D18.5) kept a group only when every counted input had at least the model's floor of

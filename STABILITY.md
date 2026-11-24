@@ -82,6 +82,29 @@ public feed, names one contract and is never repacked: a change after that point
 
 ## Versions
 
+### 0.5.0 — DRAFT
+
+Built against `Fuaran.Core.*` 0.45.0 and `Fuaran.Compute.DataFrame` 0.46.0, the newest published line, on which
+Compute is itself built (DECISIONS.md D22). 0.4.0 is tagged, so the change cannot ride it, and it is breaking, so on
+the `0.x` line it advances the minor.
+
+- **Breaking — the Core and Compute line moves from 0.42.0 and 0.44.0 to 0.45.0 and 0.46.0.** Their types are in
+  this package's public surface (`ModelNode`, `Transform`, `ColExpr`, `Table`, `Defect`), and every package here now
+  depends on the new line. Earlier releases fail at run time on Core 0.45.0: the type initialiser of `ModelRules`
+  builds a `RuleFamily`, which Core 0.45.0 made opaque.
+- **Breaking — `PipelineRefusal` gains `StepNotAdmitted(step, kind)`**, last. A pipeline carrying a `kmeans` or a
+  `bootstrap` step, in itself or in a grouped operand, is refused by name before anything is walked, decided or
+  lowered; under the policy it is `PolicyRefusal.Pipeline`, code `DB-PIPELINE`, so `Policy.codes` does not move. A
+  closed union gaining a case breaks every exhaustive match a consumer has written.
+- Unchanged: the rule ids, their order and every defect they report; the public `Grant` type; every refusal code and
+  wire spelling that 0.4.0 wrote; the dialect conformance fixtures, re-emitted at kit 0.5.0 with only the stamp
+  moving.
+
+**What a consumer does.** Raise its own `Fuaran.Core.*` pins to 0.45.0 and its `Fuaran.Compute.*` pins to 0.46.0
+with this release, so the restore graph holds one Core and one Compute. An exhaustive match over `Transform` gains
+`KMeans` and `Bootstrap`, and one over `PipelineRefusal` gains `StepNotAdmitted`. A consumer that passed either step
+to the policy gets the refusal; one that names `Grant` with `Fuaran.Core` and `Fuaran.DB` both open names it in full.
+
 ### 0.4.0
 
 A keyed grant: a classified column keys a grouping or a join, and never reaches the result (Phase 40,
