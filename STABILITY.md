@@ -82,11 +82,26 @@ public feed, names one contract and is never repacked: a change after that point
 
 ## Versions
 
-### 0.5.0 — DRAFT
+### 0.5.1 — DRAFT
+
+Built against `Fuaran.Core.*` 0.45.0 and `Fuaran.Compute.DataFrame` 0.47.0, the newest published line, on which
+Compute is itself built. 0.5.0 is tagged, so the change cannot ride it, and it is additive, so on the `0.x` line it
+advances the patch.
+
+- **Additive — the Compute line moves from 0.46.0 to 0.47.0.** Every package here now depends on it. Compute 0.47.0
+  is additive over 0.46.0 (`Fuaran.Compute.Elementary` gains sine, cosine and the two arc tangents, and two new
+  geometric-algebra packages are cut, which nothing here references), and it is built on the same Core, 0.45.0.
+- Unchanged: every type and member this repository publishes, every rule, refusal code and wire spelling that
+  0.5.0 wrote; the dialect conformance fixtures, re-emitted at kit 0.5.1 with only the stamp moving.
+
+**What a consumer does.** Raise its own `Fuaran.Compute.*` pins to 0.47.0 with this release, so the restore graph
+holds one Compute. No source changes.
+
+### 0.5.0
 
 Built against `Fuaran.Core.*` 0.45.0 and `Fuaran.Compute.DataFrame` 0.46.0, the newest published line, on which
 Compute is itself built (DECISIONS.md D22). 0.4.0 is tagged, so the change cannot ride it, and it is breaking, so on
-the `0.x` line it advances the minor.
+the `0.x` line it advances the minor. Tagged `v0.5.0` and published on nuget.org.
 
 - **Breaking — the Core and Compute line moves from 0.42.0 and 0.44.0 to 0.45.0 and 0.46.0.** Their types are in
   this package's public surface (`ModelNode`, `Transform`, `ColExpr`, `Table`, `Defect`), and every package here now
