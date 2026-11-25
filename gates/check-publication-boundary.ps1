@@ -223,6 +223,9 @@ $carriedHistory = @(
     @{ Commit = 'cf0b2f25e012'; Pattern = 'framing-monorepo'
         Reason = 'a dependency-raise message says the raise was recorded in a version ledger at the root of the tree it was developed in; it names no repository, product or person (DECISIONS D14)'
     }
+    @{ Commit = '87b331df7aed'; Pattern = 'company-repo'
+        Reason = 'a Signed-off-by trailer carries the author''s address at the copyright holder, the legal entity the licence and package metadata already name; it names no repository or product, and a pushed message is not rewritten (DECISIONS D14)'
+    }
 )
 
 # ---------------------------------------------------------------------------------------------
